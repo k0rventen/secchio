@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secchio-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: secchio-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secchio-operator
+  template:
+    metadata:
+      labels:
+        app: secchio-operator
+    spec:
+      serviceAccountName: secchio-operator
+      automountServiceAccountToken: true
+      containers:
+        - name: secchio
+          image: "{{ .Values.operator.image }}:{{ .Values.operator.tag }}"
+          env:
+            - name: RESTIC_IMAGE
+              value: "{{ .Values.operator.resticImage }}"
+          ports:
+          - containerPort: 8000
+          securityContext:
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: secchio-ui
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+  - name: "http"
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    app: secchio-operator

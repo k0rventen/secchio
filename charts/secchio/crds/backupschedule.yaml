@@ -1,0 +1,124 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backupschedules.secchio.cocointhe.cloud
+  labels:
+    app: secchio-operator
+spec:
+  group: secchio.cocointhe.cloud
+  names:
+    kind: BackupSchedule
+    listKind: BackupScheduleList
+    plural: backupschedules
+    singular: backupschedule
+    shortNames:
+      - bks
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: All OK
+          type: boolean
+          jsonPath: .status.allOk
+        - name: Total
+          type: integer
+          jsonPath: .status.summary.totalBackups
+        - name: Healthy
+          type: integer
+          jsonPath: .status.summary.healthyBackups
+        - name: Failed
+          type: integer
+          jsonPath: .status.summary.failedBackups
+        - name: Last Backup
+          type: string
+          jsonPath: .status.lastBackupTime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - pvc
+                - repo
+                - schedule
+              properties:
+                pvc:
+                  type: object
+                  description: Label selector to match PVCs (cluster-scoped)
+                  properties:
+                    selector:
+                      type: object
+                      description: Label selector to match PVCs
+                      additionalProperties:
+                        type: string
+                schedule:
+                  type: string
+                  description: Cron expression for backup schedule (e.g. 0 2 * * *)
+                repo:
+                  type: object
+                  required:
+                    - secretName
+                    - endpoint
+                  properties:
+                    endpoint:
+                      type: string
+                      description: Full S3 endpoint URL (my-s3.my-domain/bucket)
+                    secretName:
+                      type: string
+                      description: Kubernetes Secret with AWS credentials
+                    insecureTLS:
+                      type: boolean
+                      description: Skip TLS verification when talking to the S3 endpoint
+                      default: false
+                retention:
+                  type: object
+                  description: GFS retention policy (restic forget args)
+                  properties:
+                    keepDaily:
+                      type: integer
+                    keepWeekly:
+                      type: integer
+                    keepMonthly:
+                      type: integer
+                    keepYearly:
+                      type: integer
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Overall health phase (Healthy/Degraded/Running/Pending)
+                allOk:
+                  type: boolean
+                  description: True if all backups under this schedule are healthy
+                lastBackupTime:
+                  type: string
+                  description: Timestamp of the most recent backup across all PVCs
+                message:
+                  type: string
+                  description: Summary description of schedule health
+                summary:
+                  type: object
+                  description: Backup count summary
+                  properties:
+                    totalBackups:
+                      type: integer
+                    healthyBackups:
+                      type: integer
+                    failedBackups:
+                      type: integer
+                    runningBackups:
+                      type: integer

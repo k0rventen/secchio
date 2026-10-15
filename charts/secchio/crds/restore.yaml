@@ -1,0 +1,87 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: restores.secchio.cocointhe.cloud
+  labels:
+    app: secchio-operator
+spec:
+  group: secchio.cocointhe.cloud
+  names:
+    kind: Restore
+    listKind: RestoreList
+    plural: restores
+    singular: restore
+    shortNames:
+      - rt
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Target PVC
+          type: string
+          jsonPath: .spec.targetPVC
+        - name: Backup Ref
+          type: string
+          jsonPath: .spec.backupRef
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Snapshot ID
+          type: string
+          jsonPath: .status.snapshotID
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - targetPVC
+                - targetPVCNamespace
+                - backupRef
+              properties:
+                targetPVC:
+                  type: string
+                  description: Name of the target PVC to restore to
+                targetPVCNamespace:
+                  type: string
+                  description: Namespace of the target PVC
+                backupRef:
+                  type: string
+                  description: Name of the Backup object to restore from
+                sourcePVC:
+                  type: string
+                  description: Optional source PVC name (defaults to backup's PVC)
+                sourcePVCNamespace:
+                  type: string
+                  description: Optional source PVC namespace (defaults to backup's PVC namespace)
+                snapshotID:
+                  type: string
+                  description: Optional specific snapshot ID to restore (defaults to latest)
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Current phase (Pending/Running/Completed/Failed)
+                startTime:
+                  type: string
+                  description: Timestamp when restore started
+                completionTime:
+                  type: string
+                  description: Timestamp when restore completed
+                snapshotID:
+                  type: string
+                  description: Restored restic snapshot ID
+                message:
+                  type: string
+                  description: Status message or error

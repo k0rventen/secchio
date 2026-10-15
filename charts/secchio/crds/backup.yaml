@@ -1,0 +1,119 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backups.secchio.cocointhe.cloud
+  labels:
+    app: secchio-operator
+spec:
+  group: secchio.cocointhe.cloud
+  names:
+    kind: Backup
+    listKind: BackupList
+    plural: backups
+    singular: backup
+    shortNames:
+      - bk
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: PVC
+          type: string
+          jsonPath: .spec.pvcName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Last Backup
+          type: string
+          jsonPath: .status.lastBackupTime
+        - name: Snapshot ID
+          type: string
+          jsonPath: .status.lastSnapshotID
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - pvcName
+                - pvcNamespace
+                - repo
+                - schedule
+              properties:
+                schedule:
+                  type: string
+                  description: Cron expression for backup schedule (e.g. 0 2 * * *)
+                pvcName:
+                  type: string
+                  description: Name of the PVC to back up
+                pvcNamespace:
+                  type: string
+                  description: Namespace of the PVC to back up
+                repo:
+                  type: object
+                  required:
+                    - secretName
+                    - endpoint
+                  properties:
+                    endpoint:
+                      type: string
+                      description: Full S3 endpoint URL (my-s3.my-domain/bucket)
+                    secretName:
+                      type: string
+                      description: Kubernetes Secret with AWS credentials
+                    insecureTLS:
+                      type: boolean
+                      description: Skip TLS verification when talking to the S3 endpoint
+                      default: false
+                retention:
+                  type: object
+                  description: GFS retention policy (restic forget args)
+                  properties:
+                    keepDaily:
+                      type: integer
+                      description: Keep N daily snapshots
+                    keepWeekly:
+                      type: integer
+                      description: Keep N weekly snapshots
+                    keepMonthly:
+                      type: integer
+                      description: Keep N monthly snapshots
+                    keepYearly:
+                      type: integer
+                      description: Keep N yearly snapshots
+                secretName:
+                  type: string
+                  description: Name of Kubernetes Secret with credentials
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Current phase (Pending/Running/Completed/Failed)
+                lastBackupTime:
+                  type: string
+                  description: Timestamp of last backup completion
+                lastSnapshotID:
+                  type: string
+                  description: Latest restic snapshot ID
+                snapshotIDs:
+                  type: array
+                  description: List of available snapshot IDs in restic repository
+                  items:
+                    type: string
+                message:
+                  type: string
+                  description: Status or error details
+                reason:
+                  type: string
+                  description: Machine-readable reason for the current phase (e.g. SecretNotFound)

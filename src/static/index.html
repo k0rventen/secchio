@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secchio Backup Operator</title>
+    <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+    <style>
+        /* Dark theme is the default — no white mode for the eyes. */
+        :root {
+            --bg: #0b1120;
+            --bg-elevated: #0f172a;
+            --surface: #1e293b;
+            --surface-hover: #334155;
+            --surface-active: #475569;
+            --border: #334155;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --text-faint: #64748b;
+            --primary: #60a5fa;
+            --primary-hover: #93c5fd;
+            --success: #4ade80;
+            --success-bg: #064e3b;
+            --danger: #f87171;
+            --danger-bg: #7f1d1d;
+            --danger-border: #b91c1c;
+            --warning: #fbbf24;
+            --warning-bg: #78350f;
+            --info: #38bdf8;
+            --info-bg: #0c4a6e;
+            --focus-ring: rgba(96, 165, 250, 0.25);
+            --overlay-bg: rgba(2, 6, 23, 0.5);
+            --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 6px 16px rgba(0, 0, 0, 0.25);
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            padding: 24px;
+            line-height: 1.5;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand-icon { width: 48px; height: 48px; flex-shrink: 0; }
+        .title-group h1 { font-size: 1.6rem; font-weight: 700; color: var(--text-main); }
+        .title-group p { font-size: 0.875rem; color: var(--text-muted); }
+
+        .header-actions { display: flex; gap: 12px; align-items: center; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border-radius: var(--radius);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.15s ease-in-out;
+            text-decoration: none;
+        }
+
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text-main); }
+        .btn-secondary:hover { background: var(--surface-hover); }
+        .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+        .btn-outline-danger { background: var(--surface); border-color: var(--danger); color: var(--danger); }
+        .btn-outline-danger:hover { background: var(--danger-bg); }
+
+        /* Stats Bar */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+        .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; }
+        .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+
+        /* Navigation Tabs */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        .tab-btn {
+            padding: 10px 16px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+        .tab-btn.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-healthy, .badge-completed { background: var(--success-bg); color: var(--success); }
+        .badge-degraded, .badge-failed { background: var(--danger-bg); color: var(--danger); }
+        .badge-running { background: var(--info-bg); color: var(--info); }
+        .badge-pending { background: var(--warning-bg); color: var(--warning); }
+
+        /* Schedule & Backup Cards */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+            overflow: hidden;
+        }
+        .card-header {
+            padding: 16px 20px;
+            background: var(--surface-hover);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .card-title { font-size: 1.15rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px; }
+        .card-body { padding: 20px; }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            font-size: 0.85rem;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px dashed var(--border);
+        }
+        .meta-item strong { color: var(--text-muted); }
+        .meta-grid .meta-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+        /* Meta value chips (schedule, repo, retention, summary) */
+        .meta-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+        .meta-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+        .meta-chip__label { color: var(--text-faint); font-weight: 600; }
+        .meta-chip__value { color: var(--text-main); font-variant-numeric: tabular-nums; }
+        .meta-empty { color: var(--text-faint); font-style: italic; }
+
+        /* Backups nested table/cards */
+        .section-subtitle {
+            font-size: 0.9rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        .backup-item {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .backup-info { flex: 1; min-width: 0; }
+        .backup-pvc { font-weight: 600; font-size: 0.95rem; }
+        /* Backup item rows: one field per line, no crowding */
+        .backup-pvc-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .backup-meta-row { margin-top: 10px; }
+        .backup-meta-row .meta-item {
+            display: flex;
+            gap: 8px;
+            font-size: 0.825rem;
+            color: var(--text-muted);
+            padding: 3px 0;
+        }
+        .snap-list .label {
+            font-size: 0.75rem;
+            color: var(--text-faint);
+        }
+        .backup-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+
+        .alert-box {
+            background: var(--danger-bg);
+            color: var(--danger);
+            padding: 8px 12px;
+            border-radius: var(--radius);
+            font-size: 0.825rem;
+            margin-top: 8px;
+            border: 1px solid var(--danger-border);
+        }
+
+        /* Snapshots Pills */
+        .snap-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+        .snap-pill {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 0.75rem;
+            font-family: monospace;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+        .snap-pill:hover { border-color: var(--primary); color: var(--primary); }
+
+        /* Table layout for Restores */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        .data-table th {
+            text-align: left;
+            padding: 12px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .data-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        .data-table tr:hover { background-color: var(--surface-hover); }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--overlay-bg);
+            backdrop-filter: blur(2px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+        }
+        .modal {
+            background: var(--surface);
+            border-radius: var(--radius);
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-title { font-size: 1.15rem; font-weight: 700; }
+        .modal-body { padding: 20px; }
+        .modal-footer {
+            padding: 14px 20px;
+            background: var(--surface-hover);
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .confirm-body {
+            padding: 20px;
+            text-align: center;
+        }
+        .confirm-body p {
+            margin: 0;
+            font-size: 0.95rem;
+            color: var(--text-main);
+        }
+
+        .form-group { margin-bottom: 16px; }
+        .form-label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--focus-ring); }
+        .form-help { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            background: var(--surface);
+            color: var(--text-main);
+            padding: 12px 18px;
+            border-radius: var(--radius);
+            font-size: 0.875rem;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.2s ease-out;
+            transition: opacity 0.3s ease;
+        }
+        .toast.success { background: var(--success-bg); color: var(--success); }
+        .toast.error { background: var(--danger-bg); color: var(--danger); }
+
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        .empty-state { text-align: center; padding: 48px; color: var(--text-muted); font-size: 0.95rem; }
+
+        /* Live auto-refresh indicator: subtle pulse + hover tooltip */
+        .live-indicator {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+        }
+        .live-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: livePulse 2.4s ease infinite;
+        }
+        @keyframes livePulse {
+            0%   { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0.55); }
+            70%  { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0   rgba(74, 222, 128, 0); }
+        }
+        .live-tooltip {
+            position: absolute;
+            right: 0;
+            bottom: calc(100% + 8px);
+            background: var(--bg-elevated);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.72rem;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease;
+            box-shadow: var(--shadow);
+        }
+        .live-indicator:hover .live-tooltip { opacity: 1; }
+        .live-indicator:hover .live-dot { animation-duration: 1.2s; }
+        @media (prefers-reduced-motion: reduce) {
+            .live-dot { animation: none; }
+            .live-indicator:hover .live-dot { animation: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="toast-container" id="toasts"></div>
+
+    <div class="container">
+        <header>
+            <div class="brand">
+                <img class="brand-icon" src="/static/icon.svg" alt="Secchio logo">
+                <div class="title-group">
+                    <h1>Secchio</h1>
+                    <p>Kubernetes PVC Backup and Restore Operator</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div class="live-indicator" role="status" aria-label="Data auto-refreshes every 30 seconds">
+                    <span class="live-dot"></span>
+                    <span class="live-tooltip">Data auto-refreshes every 30 seconds</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Backup Schedules</div>
+                <div class="stat-value" id="stat-schedules">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Backups</div>
+                <div class="stat-value" id="stat-backups">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Healthy Backups</div>
+                <div class="stat-value" id="stat-healthy" style="color: var(--success);">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Recent Restores</div>
+                <div class="stat-value" id="stat-restores">-</div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" id="tab-btn-schedules" onclick="switchTab('schedules')">Schedules & Backups</button>
+            <button class="tab-btn" id="tab-btn-restores" onclick="switchTab('restores')">Restores</button>
+        </div>
+
+        <!-- Tab 1: Schedules & Backups -->
+        <div id="tab-schedules">
+            <div id="schedules-container"></div>
+        </div>
+
+        <!-- Tab 2: Restores -->
+        <div id="tab-restores" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Restore Operations</div>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div id="restores-container"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trigger Restore Modal -->
+    <div class="modal-overlay" id="restore-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Trigger Restore</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeRestoreModal()">✕</button>
+            </div>
+            <form id="restore-form" onsubmit="submitRestore(event)">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label">Source Backup</label>
+                        <input type="text" class="form-control" id="modal-backup-ref" readonly style="background: var(--bg-elevated); color: var(--text-main);">
+                        <input type="hidden" id="modal-backup-ns">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Snapshot to Restore</label>
+                        <select class="form-control" id="modal-snapshot-id"></select>
+                        <div class="form-help">Choose "latest" or a specific snapshot ID from this backup repository.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Target PVC Name</label>
+                        <input type="text" class="form-control" id="modal-target-pvc" required placeholder="e.g. app-data-restore">
+                        <div class="form-help">The PersistentVolumeClaim to restore the data into.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Target Namespace</label>
+                        <input type="text" class="form-control" id="modal-target-ns" required placeholder="e.g. default">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-restore">Start Restore</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirm Backup Modal -->
+    <div class="modal-overlay" id="confirm-backup-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Trigger Backup</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeBackupConfirmModal()">✕</button>
+            </div>
+            <div class="confirm-body">
+                <p>Are you sure you want to trigger a backup on PVC <strong id="confirm-backup-target"></strong>?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeBackupConfirmModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-backup" onclick="confirmTriggerBackup()">Yes, Trigger Backup</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'schedules';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tab-schedules').style.display = tab === 'schedules' ? 'block' : 'none';
+            document.getElementById('tab-restores').style.display = tab === 'restores' ? 'block' : 'none';
+            document.getElementById('tab-btn-schedules').classList.toggle('active', tab === 'schedules');
+            document.getElementById('tab-btn-restores').classList.toggle('active', tab === 'restores');
+            loadAllData();
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toasts');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function phaseBadge(phase) {
+            const p = phase || 'Pending';
+            return `<span class="badge badge-${p.toLowerCase()}">${escapeHtml(p)}</span>`;
+        }
+
+        // JSON-encode a value so it can be safely embedded in a double-quoted HTML attribute.
+        function jsArg(value) {
+            return JSON.stringify(value).replace(/"/g, '&quot;');
+        }
+
+        function chip(value, { label, color } = {}) {
+            const labelHtml = label ? `<span class="meta-chip__label">${escapeHtml(label)}</span>` : '';
+            const style = color ? ` style="color: ${color}"` : '';
+            return `<span class="meta-chip">${labelHtml}<span class="meta-chip__value"${style}>${escapeHtml(value)}</span></span>`;
+        }
+
+        function chips(parts) {
+            return `<span class="meta-chips">${parts.join('')}</span>`;
+        }
+
+        async function loadAllData() {
+            try {
+                const [schedulesRes, restoresRes] = await Promise.all([
+                    fetch('/api/schedules'),
+                    fetch('/api/restores')
+                ]);
+
+                const schedules = await schedulesRes.json();
+                const restores = await restoresRes.json();
+
+                renderOverview(schedules, restores);
+                renderSchedules(schedules);
+                renderRestores(restores);
+            } catch (err) {
+                console.error('Failed to load data:', err);
+                showToast('Failed to refresh data from server', 'error');
+            }
+        }
+
+        function renderOverview(schedules, restores) {
+            let totalBackups = 0;
+            let healthyBackups = 0;
+
+            schedules.forEach(s => {
+                const summary = s.status?.summary || {};
+                totalBackups += (s.backups?.length || summary.totalBackups || 0);
+                healthyBackups += (summary.healthyBackups || 0);
+            });
+
+            document.getElementById('stat-schedules').textContent = schedules.length;
+            document.getElementById('stat-backups').textContent = totalBackups;
+            document.getElementById('stat-healthy').textContent = healthyBackups;
+            document.getElementById('stat-restores').textContent = restores.length;
+        }
+
+        function renderSchedules(schedules) {
+            const container = document.getElementById('schedules-container');
+            if (schedules.length === 0) {
+                container.innerHTML = '<div class="card empty-state">No BackupSchedules found in the cluster.</div>';
+                return;
+            }
+
+            container.innerHTML = schedules.map(s => {
+                const allOk = s.status?.allOk ? '✓ All OK' : '';
+                const summary = s.status?.summary || {};
+                const summaryParts = [
+                    { label: 'Total', value: summary.totalBackups ?? 0, color: 'var(--text-faint)' },
+                    { label: 'Healthy', value: summary.healthyBackups ?? 0, color: 'var(--success)' },
+                    { label: 'Failed', value: summary.failedBackups ?? 0, color: 'var(--danger)' },
+                    { label: 'Running', value: summary.runningBackups ?? 0, color: 'var(--info)' },
+                ];
+                const retention = s.retention || {};
+                const retentionParts = [];
+                if (retention.keepDaily !== undefined && retention.keepDaily !== null && retention.keepDaily !== '') retentionParts.push({ label: 'Daily', value: retention.keepDaily });
+                if (retention.keepWeekly !== undefined && retention.keepWeekly !== null && retention.keepWeekly !== '') retentionParts.push({ label: 'Weekly', value: retention.keepWeekly });
+                if (retention.keepMonthly !== undefined && retention.keepMonthly !== null && retention.keepMonthly !== '') retentionParts.push({ label: 'Monthly', value: retention.keepMonthly });
+
+                const backupsHtml = (s.backups && s.backups.length > 0)
+                    ? s.backups.map(b => renderBackupItem(b)).join('')
+                    : (s.matched_pvcs && s.matched_pvcs.length > 0)
+                        ? s.matched_pvcs.map(p => `
+                            <div class="backup-item">
+                                <div class="backup-info">
+                                    <div class="backup-pvc">${escapeHtml(p.namespace)} / ${escapeHtml(p.name)}</div>
+                                    <div class="backup-meta">PVC matched, waiting for backup initialization...</div>
+                                </div>
+                            </div>
+                        `).join('')
+                        : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
+
+                const scheduleHtml = chips([chip(s.schedule || '-')]);
+                const repoHtml = chips([chip(s.repo?.endpoint || '-')]);
+                const retentionHtml = retentionParts.length
+                    ? chips(retentionParts.map(r => chip(r.value, { label: r.label })))
+                    : '<span class="meta-empty">Not configured</span>';
+                const summaryHtml = chips(summaryParts.map(p => chip(p.value, { label: p.label, color: p.color })));
+
+                return `
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span>${escapeHtml(s.name)}</span>
+                            ${phaseBadge(s.status?.phase)}
+                            <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${allOk}</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="meta-grid">
+                            <div class="meta-item"><strong>Schedule:</strong>${scheduleHtml}</div>
+                            <div class="meta-item"><strong>Repo:</strong>${repoHtml}</div>
+                            <div class="meta-item"><strong>Retention:</strong>${retentionHtml}</div>
+                            <div class="meta-item"><strong>Summary:</strong>${summaryHtml}</div>
+                        </div>
+
+                        <div class="section-subtitle">Target PVC Backups (${(s.backups && s.backups.length) || (s.matched_pvcs && s.matched_pvcs.length) || 0})</div>
+                        ${backupsHtml}
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function renderBackupItem(b) {
+            const phase = b.phase || 'Pending';
+            const lastBackup = b.last_backup_time ? new Date(b.last_backup_time).toLocaleString() : 'Never';
+            const snapshotId = b.last_snapshot_id || 'None';
+            const snapshotList = (b.snapshot_ids && b.snapshot_ids.length > 0)
+                ? b.snapshot_ids.map(sid => `<span class="snap-pill" title="Click to restore this snapshot" onclick="openRestoreModalForSnapshot(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(sid)})">${escapeHtml(sid)}</span>`).join('')
+                : '';
+
+            return `
+            <div class="backup-item">
+                <div class="backup-info">
+                    <div class="backup-pvc-row">
+                        <span class="backup-pvc">${escapeHtml(b.pvc_namespace)} / ${escapeHtml(b.pvc_name)}</span>
+                        ${phaseBadge(phase)}
+                    </div>
+                    <div class="backup-meta-row">
+                        <div class="meta-item"><strong>Backup CR:</strong> <code>${escapeHtml(b.name)}</code></div>
+                        <div class="meta-item"><strong>Last Run:</strong> ${escapeHtml(lastBackup)}</div>
+                        <div class="meta-item"><strong>Latest Snapshot:</strong> <code>${escapeHtml(snapshotId)}</code></div>
+                    </div>
+                    ${snapshotList ? `<div class="snap-list"><span class="label">Snapshots:</span> ${snapshotList}</div>` : ''}
+                    ${phase === 'Failed' && b.message ? `<div class="alert-box"><strong>Failure Reason:</strong> ${escapeHtml(b.message)}</div>` : ''}
+                </div>
+                <div class="backup-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(b.pvc_namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.namespace)}, ${jsArg(b.name)})">▶ Trigger Backup</button>
+                    <button class="btn btn-primary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.snapshot_ids || [])})">↺ Restore</button>
+                </div>
+            </div>
+            `;
+        }
+
+        function renderRestores(restores) {
+            const container = document.getElementById('restores-container');
+            if (restores.length === 0) {
+                container.innerHTML = '<div class="empty-state">No Restore operations recorded yet.</div>';
+                return;
+            }
+
+            container.innerHTML = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Restore Name</th>
+                        <th>Target PVC</th>
+                        <th>Source Backup Ref</th>
+                        <th>Snapshot</th>
+                        <th>Status</th>
+                        <th>Time</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${restores.map(r => {
+                        const phase = r.phase || 'Pending';
+                        const timeStr = r.completion_time
+                            ? `Completed: ${new Date(r.completion_time).toLocaleTimeString()}`
+                            : (r.start_time ? `Started: ${new Date(r.start_time).toLocaleTimeString()}` : '-');
+
+                        return `
+                        <tr>
+                            <td><strong>${escapeHtml(r.name)}</strong><br><small style="color: var(--text-muted);">${escapeHtml(r.namespace)}</small></td>
+                            <td><code>${escapeHtml(r.target_pvc_namespace)} / ${escapeHtml(r.target_pvc)}</code></td>
+                            <td><code>${escapeHtml(r.backup_ref)}</code></td>
+                            <td><code>${escapeHtml(r.restored_snapshot_id || r.snapshot_id || 'latest')}</code></td>
+                            <td>${phaseBadge(phase)}</td>
+                            <td><small>${escapeHtml(timeStr)}</small></td>
+                            <td><small style="color: ${phase === 'Failed' ? 'var(--danger)' : 'var(--text-muted)'};">${escapeHtml(r.message || '-')}</small></td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+            `;
+        }
+
+        async function triggerBackup(namespace, backupName) {
+            try {
+                showToast(`Triggering manual backup for ${backupName}...`, 'info');
+                const res = await fetch(`/api/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(backupName)}/trigger`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to trigger backup');
+
+                showToast(`Job ${data.job_name} launched successfully!`, 'success');
+                setTimeout(loadAllData, 2000);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        function openBackupConfirmModal(pvcNamespace, pvcName, namespace, backupName) {
+            document.getElementById('confirm-backup-target').textContent = `${pvcNamespace} / ${pvcName}`;
+            document.getElementById('confirm-backup-modal').dataset.backupNamespace = namespace;
+            document.getElementById('confirm-backup-modal').dataset.backupName = backupName;
+            document.getElementById('confirm-backup-modal').style.display = 'flex';
+        }
+
+        function closeBackupConfirmModal() {
+            document.getElementById('confirm-backup-modal').style.display = 'none';
+        }
+
+        async function confirmTriggerBackup() {
+            const modal = document.getElementById('confirm-backup-modal');
+            await triggerBackup(modal.dataset.backupNamespace, modal.dataset.backupName);
+            closeBackupConfirmModal();
+        }
+
+        function openRestoreModal(backupRef, backupNs, pvcName, snapshotIds) {
+            document.getElementById('modal-backup-ref').value = backupRef;
+            document.getElementById('modal-backup-ns').value = backupNs;
+            document.getElementById('modal-target-pvc').value = pvcName;
+            document.getElementById('modal-target-ns').value = backupNs;
+
+            const select = document.getElementById('modal-snapshot-id');
+            select.innerHTML = '<option value="latest">latest (most recent)</option>';
+            if (snapshotIds && snapshotIds.length > 0) {
+                snapshotIds.forEach(sid => {
+                    const opt = document.createElement('option');
+                    opt.value = sid;
+                    opt.textContent = sid;
+                    select.appendChild(opt);
+                });
+            }
+
+            document.getElementById('restore-modal').style.display = 'flex';
+        }
+
+        function openRestoreModalForSnapshot(backupRef, backupNs, pvcName, specificSnapId) {
+            openRestoreModal(backupRef, backupNs, pvcName, [specificSnapId]);
+            document.getElementById('modal-snapshot-id').value = specificSnapId;
+        }
+
+        function closeRestoreModal() {
+            document.getElementById('restore-modal').style.display = 'none';
+        }
+
+        async function submitRestore(event) {
+            event.preventDefault();
+            const btn = document.getElementById('btn-submit-restore');
+            btn.disabled = true;
+            btn.textContent = 'Initiating...';
+
+            const payload = {
+                backup_ref: document.getElementById('modal-backup-ref').value,
+                backup_namespace: document.getElementById('modal-backup-ns').value,
+                target_pvc: document.getElementById('modal-target-pvc').value.trim(),
+                target_pvc_namespace: document.getElementById('modal-target-ns').value.trim(),
+                snapshot_id: document.getElementById('modal-snapshot-id').value,
+            };
+
+            try {
+                const res = await fetch('/api/restores', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to create restore');
+
+                showToast(`Restore '${data.name}' initiated successfully!`, 'success');
+                closeRestoreModal();
+                switchTab('restores');
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Start Restore';
+            }
+        }
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+
+        // Initial Load & Auto-refresh Polling
+        loadAllData();
+        setInterval(loadAllData, 30000);
+    </script>
+</body>
+</html>
