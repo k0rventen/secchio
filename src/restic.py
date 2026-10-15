@@ -33,7 +33,7 @@ logger = logging.getLogger("restic")
 
 # restic's local cache needs a writable volume, because the container's root
 # filesystem is read-only.
-CACHE_DIR = "/cache"
+CACHE_DIR = "/tmp"
 
 
 def build_restic_env(

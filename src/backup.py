@@ -31,6 +31,7 @@ from restic import (
     build_restic_env,
     cache_mount,
     cache_volume,
+    container_security_context,
 )
 
 
@@ -63,9 +64,10 @@ def build_backup_command(retention: RetentionConfig, insecure_tls: bool = False)
     if args := retention.to_restic_args():
         forget_step = f"restic forget{tls_flag} --verbose --prune " + " ".join(args)
 
+    TIMEOUT="60s"
     script_lines = [
         "set -euo pipefail",
-        f"restic snapshots{tls_flag} > /dev/null 2>&1 || restic init{tls_flag}",
+        f"timeout {TIMEOUT} restic snapshots{tls_flag} > /dev/null 2>&1 || restic init{tls_flag}",
         f"BACKUP_OUT=$(restic backup /data --verbose{tls_flag})",
         'echo "$BACKUP_OUT"',
         "SNAP_ID=$(echo \"$BACKUP_OUT\" | grep -oE 'snapshot [a-f0-9]+ saved' | cut -d' ' -f2 || true)",
@@ -111,6 +113,7 @@ def create_cronjob(config: JobConfig, schedule: str) -> V1CronJob:
         command=cmd,
         env=env,
         volume_mounts=mounts,
+        security_context=container_security_context(),
         termination_message_path="/dev/termination-log",
         termination_message_policy="FallbackToLogsOnError",
         resources=V1ResourceRequirements(
@@ -163,6 +166,7 @@ def create_cronjob(config: JobConfig, schedule: str) -> V1CronJob:
             job_template=V1JobTemplateSpec(
                 metadata=V1ObjectMeta(labels=cronjob_labels),
                 spec=V1JobSpec(
+                    backoff_limit=2,
                     template=V1PodTemplateSpec(
                         metadata=V1ObjectMeta(labels=cronjob_labels),
                         spec=pod_spec,

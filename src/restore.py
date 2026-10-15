@@ -56,10 +56,11 @@ def build_restore_command(snapshot_id: str = "latest", insecure_tls: bool = Fals
     tls_flag = " --insecure-tls" if insecure_tls else ""
     target_snap = snapshot_id or "latest"
 
+    TIMEOUT="60s"
     script_lines = [
         "set -euo pipefail",
-        f"restic restore {target_snap} --delete --target / -i /data --verbose{tls_flag}",
-        f'RESOLVED_SNAP=$(restic snapshots {target_snap} --compact{tls_flag} 2>/dev/null | grep -E "^[a-f0-9]{{8}}" | cut -d" " -f1 | head -n 1 || echo "{target_snap}")',
+        f"timeout {TIMEOUT} restic restore {target_snap} --delete --target / -i /data --verbose{tls_flag}",
+        f'RESOLVED_SNAP=$(timeout {TIMEOUT} restic snapshots {target_snap} --compact{tls_flag} 2>/dev/null | grep -E "^[a-f0-9]{{8}}" | cut -d" " -f1 | head -n 1 || echo "{target_snap}")',
         'printf "RESTORED_SNAPSHOT_ID=%s\\n" "$RESOLVED_SNAP" > /dev/termination-log',
     ]
 
