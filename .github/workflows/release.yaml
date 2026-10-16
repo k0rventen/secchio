@@ -21,7 +21,7 @@ jobs:
           tag_clean="${tag_version#v}"
 
           chart_version="$(grep -m1 '^version:' charts/secchio/Chart.yaml | sed 's/^[^:]*:[[:space:]]*//')"
-          pyproject_version="$(grep -m1 '^version =' pyproject.toml | sed 's/[[:space:]]*=[[:space:]]*//' | tr -d '"' | tr -d ' ')"
+          pyproject_version="$(cat pyproject.toml | grep -E '^version\W+=' | cut -d'=' -f2 | tr -d '"' | tr -d ' ')"
 
           echo "Tag version:      $tag_version (clean: $tag_clean)"
           echo "Chart version:    $chart_version"
