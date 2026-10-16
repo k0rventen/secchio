@@ -38,7 +38,7 @@ jobs:
           fi
 
   # 2. Build and push the operator image with a semver tag.
-  build-push:
+  oci-images-build:
     needs: version-check
     runs-on: ubuntu-latest
     permissions:
@@ -61,35 +61,22 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       -
-        name: Build and push
+        name: Build and push operator
         uses: docker/build-push-action@v7
         with:
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-
-
-      - name: generate changelog
-        id: changelog
-        uses: requarks/changelog-action@v1.10.3
+          tags: ghcr.io/${{ github.repository }}-operator:${{ github.ref_name }}
+      -
+        name: Build and push restic
+        uses: docker/build-push-action@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref_name }}
-          includeInvalidCommits: true
-          useGitmojis: false
+          context: ./restic-pod
+          push: true
+          tags: ghcr.io/${{ github.repository }}-restic:${{ github.ref_name }}
 
 
-      - name: create release with changelog
-        uses: ncipollo/release-action@v1.21.0
-        with:
-          allowUpdates: true
-          makeLatest: true
-          draft: false
-          name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changes }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # 3. Rebuild the charts index with chart-releaser.
-  release:
+  helm-chart-build:
+    needs: version-check
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,3 +100,31 @@ jobs:
             oci_password: ${{ secrets.GITHUB_TOKEN }}
             github_token: ${{ secrets.GITHUB_TOKEN }}
             skip_gh_release: true
+
+
+  release-notes:
+    needs: version-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: generate changelog
+        id: changelog
+        uses: requarks/changelog-action@v1.10.3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+          includeInvalidCommits: true
+          useGitmojis: false
+
+
+      - name: create release with changelog
+        uses: ncipollo/release-action@v1.21.0
+        with:
+          allowUpdates: true
+          makeLatest: true
+          draft: false
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.changes }}
+          token: ${{ secrets.GITHUB_TOKEN }}
