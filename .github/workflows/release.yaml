@@ -86,12 +86,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: Configure Git
+      - name: helm chart prep
         run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-
+          cp README.md charts/secchio
       - name: Run chart-releaser
         uses: bitdeps/helm-oci-charts-releaser@v0.1.5
         with:
