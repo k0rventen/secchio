@@ -2,7 +2,7 @@
 
 operator:
   # Pin this to an immutable tag or digest in production.
-  image: gitea.cocointhe.cloud/coco/secchio
-  tag: latest
+  image: ghcr.io/k0rventen/secchio-operator
+  tag: v0.7.0
   # Image the backup/restore Job pods use to run restic.
-  resticImage: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+  resticImage: ghcr.io/k0rventen/secchio-restic:latest
