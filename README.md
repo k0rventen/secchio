@@ -25,27 +25,19 @@ storage using [restic](https://restic.net/), and restores them on demand.
 It is built on [kopf](https://kopf.readthedocs.io/) for talking with k8s, 
 and ships a small web UI from where you can view backups and restores.
 You can trigger one-shot backups and pvc restore from it.
+
 ![](docs/ui.png)
-- **Core idea:** the operator only orchestrates native Kubernetes objects. Meaning ff the operator is down, existing backups are still being done through their respective cronjobs.
-- **Storage:** S3-compatible (used by restic)
-- **CRDs:** `BackupSchedule` (cluster-scoped) selects PVCs by label; `Backup`
-  (namespaced, one per PVC) drives a CronJob; `Restore` (namespaced) runs a one-off Job.
 
-## Contents
-
-- [Architecture](#architecture)
-- [Technical choices](#technical-choices)
-- [Data model](#data-model)
-- [Components](#components)
-- [Quickstart](#quickstart)
-- [Custom resources](#custom-resources)
-- [Configuration](#configuration)
-- [Development](#development)
+When starting the project, I had a few things in mind:
+- Resilience: the operator should only orchestrates native Kubernetes objects. Meaning if the operator is down, existing backups are still being done
+- Standing on the shoulders of giants: I'm not rolling my own backup mecanism, I'm simply wrapping trusted tech.
+- Explore CRDs & operator: I wanted to learn more on how operators work, and how we interact/work with your own CRDs.
+- A simple UI to create on demand backup/restore, rather than creating a random yaml file that will be used one shot.
 
 ## Architecture
 
-Three custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe intent; the
-operator turns them into native workloads. 
+Three custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe backup/restore intent; the
+operator turns them into native workloads that kubernetes can execute.
 
 ```mermaid
 flowchart TD
@@ -75,10 +67,15 @@ the S3 repository.
 ### Local development with Tilt
 
 ```bash
-tilt up
+tilt up --stream
 ```
 
-This deploys the operator from `charts/secchio/` using the tilt values.
+## Inspiration and credits
+
+This repo is inspired by other backup systems like velero, k8up. Thanks to this repo https://github.com/alubbock/backup-pvc-examples/tree/main/aws-s3 for triggering the 'well it's not that complicated is it ??' moment.
+
+I'm using kopf for talking to k8s, restic for handling backups, fastapi for the interface.
+
 
 ## License
 

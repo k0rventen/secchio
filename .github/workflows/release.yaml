@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # 1. Verify the tag version matches the chart version before building/releasing.
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify versions match tag
+        run: |
+          tag_version="${GITHUB_REF#refs/tags/}"
+          tag_clean="${tag_version#v}"
+
+          chart_version="$(grep -m1 '^version:' charts/secchio/Chart.yaml | sed 's/^[^:]*:[[:space:]]*//')"
+          pyproject_version="$(grep -m1 '^version =' pyproject.toml | sed 's/[[:space:]]*=[[:space:]]*//' | tr -d '"' | tr -d ' ')"
+
+          echo "Tag version:      $tag_version (clean: $tag_clean)"
+          echo "Chart version:    $chart_version"
+          echo "Pyproject version: $pyproject_version"
+
+          if [ "$tag_clean" != "$chart_version" ]; then
+            echo "::error::Chart version ($chart_version) does not match tag ($tag_version)"
+            exit 1
+          fi
+
+          if [ "$tag_clean" != "$pyproject_version" ]; then
+            echo "::error::Pyproject version ($pyproject_version) does not match tag ($tag_version)"
+            exit 1
+          fi
+
+  # 2. Build and push the operator image with a semver tag.
+  build-push:
+    needs: version-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      -
+        name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+
+      - name: generate changelog
+        id: changelog
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+          includeInvalidCommits: true
+          useGitmojis: false
+
+
+      - name: create release with changelog
+        uses: ncipollo/release-action@v1.12.0
+        with:
+          allowUpdates: true
+          makeLatest: true
+          draft: false
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.changes }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # 3. Rebuild the charts index with chart-releaser.
+  release:
+    needs: version-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
