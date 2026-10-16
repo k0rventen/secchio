@@ -2,8 +2,8 @@ apiVersion: v2
 name: secchio
 description: A Kubernetes PVC backup operator
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.7.0
+appVersion: "0.7.0"
 home: https://github.com/k0rventen/secchio
 sources:
 - https://github.com/k0rventen/secchio

@@ -1,6 +1,6 @@
 [project]
 name = "secchio"
-version = "0.6.0"
+version = "0.7.0"
 description = "K8s PVC Backup&Restore operator"
 readme = "README.md"
 requires-python = ">=3.14"
