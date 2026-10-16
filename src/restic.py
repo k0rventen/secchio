@@ -26,7 +26,7 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException, OpenApiException
 
-from crds import S3BackendConfig
+from crds import RetentionConfig, S3BackendConfig
 from k8s import get_core_api
 
 logger = logging.getLogger("restic")
@@ -85,6 +85,28 @@ def build_restic_env(
             ),
         ),
     ]
+
+
+def entrypoint_env(
+    mode: str,
+    *,
+    insecure_tls: bool = False,
+    retention: RetentionConfig | None = None,
+    snapshot_id: str = "",
+) -> list[V1EnvVar]:
+    """Environment that configures the restic image's entrypoint.
+
+    The image (see ``restic-pod/``) reads these to decide what to run, instead
+    of the operator inlining a shell script into the pod spec.
+    """
+    env = [V1EnvVar(name="SECCHIO_MODE", value=mode)]
+    if insecure_tls:
+        env.append(V1EnvVar(name="SECCHIO_INSECURE_TLS", value="true"))
+    if retention is not None and (args := retention.to_restic_args()):
+        env.append(V1EnvVar(name="SECCHIO_RETENTION", value=" ".join(args)))
+    if snapshot_id:
+        env.append(V1EnvVar(name="SECCHIO_SNAPSHOT", value=snapshot_id))
+    return env
 
 
 @dataclass

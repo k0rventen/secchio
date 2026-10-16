@@ -1,7 +1,8 @@
 """Restore job creation and execution logic.
 
-This module handles creating Kubernetes Jobs that run restic to restore
-snapshots to a target PersistentVolumeClaim.
+Builds the Kubernetes Job that runs the restic image to restore a snapshot into
+a target PersistentVolumeClaim. The image's entrypoint (see ``restic-pod/``)
+does the actual work, driven by the SECCHIO_* environment variables set here.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from restic import (
     cache_mount,
     cache_volume,
     container_security_context,
+    entrypoint_env,
     pod_security_context,
 )
 
@@ -51,22 +53,6 @@ class RestoreJobConfig:
     backup_name: str = ""
 
 
-def build_restore_command(snapshot_id: str = "latest", insecure_tls: bool = False) -> list[str]:
-    """Build the restic command sequence for restoring a snapshot into /data."""
-    tls_flag = " --insecure-tls" if insecure_tls else ""
-    target_snap = snapshot_id or "latest"
-
-    TIMEOUT="60s"
-    script_lines = [
-        "set -euo pipefail",
-        f"timeout {TIMEOUT} restic restore {target_snap} --delete --target / -i /data --verbose{tls_flag}",
-        f'RESOLVED_SNAP=$(timeout {TIMEOUT} restic snapshots {target_snap} --compact{tls_flag} 2>/dev/null | grep -E "^[a-f0-9]{{8}}" | cut -d" " -f1 | head -n 1 || echo "{target_snap}")',
-        'printf "RESTORED_SNAPSHOT_ID=%s\\n" "$RESOLVED_SNAP" > /dev/termination-log',
-    ]
-
-    return ["/bin/sh", "-c", "\n".join(script_lines)]
-
-
 def create_restore_job(config: RestoreJobConfig) -> V1Job:
     """Create a Kubernetes batch/v1 Job for restoring data to target PVC."""
     env = build_restic_env(
@@ -75,7 +61,11 @@ def create_restore_job(config: RestoreJobConfig) -> V1Job:
         config.source_pvc,
         config.source_pvc_namespace,
     )
-    cmd = build_restore_command(config.snapshot_id, config.repo.insecure_tls)
+    env += entrypoint_env(
+        "restore",
+        insecure_tls=config.repo.insecure_tls,
+        snapshot_id=config.snapshot_id,
+    )
 
     volumes = [
         V1Volume(
@@ -99,7 +89,6 @@ def create_restore_job(config: RestoreJobConfig) -> V1Job:
     container = V1Container(
         name="restic-restore",
         image=config.image,
-        command=cmd,
         env=env,
         volume_mounts=mounts,
         security_context=container_security_context(),

@@ -6,7 +6,7 @@ import os
 from datetime import UTC, datetime
 
 # Operator configuration (set from the Helm chart as env vars)
-RESTIC_IMAGE = os.environ.get("RESTIC_IMAGE", "restic/restic:latest")
+RESTIC_IMAGE = os.environ.get("RESTIC_IMAGE", "ghcr.io/k0rventen/secchio-restic:latest")
 
 # CRD Schema Constants
 CRD_GROUP = "secchio.cocointhe.cloud"

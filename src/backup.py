@@ -1,8 +1,9 @@
 """Backup workload construction
 
-Builds the Kubernetes CronJob that runs restic for a single PVC
-creates the repo if it does not exists yet, then restic backup (from /data where the pvc is mounted)
-then restic forget if the retention is configured
+Builds the Kubernetes CronJob that runs the restic image for a single PVC. The
+image's entrypoint (see ``restic-pod/``) does the actual work — init the repo,
+back up /data, then forget per the retention policy — driven by the SECCHIO_*
+environment variables set here.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from restic import (
     cache_mount,
     cache_volume,
     container_security_context,
+    entrypoint_env,
 )
 
 
@@ -52,43 +54,14 @@ class JobConfig:
     backup_uid: str = ""
 
 
-def build_backup_command(retention: RetentionConfig, insecure_tls: bool = False) -> list[str]:
-    """Build the restic command sequence (init -> backup -> forget) for a backup job.
-
-    Captures the new snapshot ID and remaining snapshot IDs, writing them to
-    /dev/termination-log so the operator can retrieve status via standard pod.status
-    without requiring cluster-wide pods/log RBAC access.
-    """
-    tls_flag = " --insecure-tls" if insecure_tls else ""
-    forget_step = ""
-    if args := retention.to_restic_args():
-        forget_step = f"restic forget{tls_flag} --verbose --prune " + " ".join(args)
-
-    TIMEOUT="60s"
-    script_lines = [
-        "set -euo pipefail",
-        f"timeout {TIMEOUT} restic snapshots{tls_flag} > /dev/null 2>&1 || restic init{tls_flag}",
-        f"BACKUP_OUT=$(restic backup /data --verbose{tls_flag})",
-        'echo "$BACKUP_OUT"',
-        "SNAP_ID=$(echo \"$BACKUP_OUT\" | grep -oE 'snapshot [a-f0-9]+ saved' | cut -d' ' -f2 || true)",
-    ]
-    if forget_step:
-        script_lines.append(forget_step)
-
-    script_lines.extend(
-        [
-            f'ALL_SNAPS=$(restic snapshots --compact{tls_flag} 2>/dev/null | grep -E "^[a-f0-9]{{8}}" | cut -d" " -f1 | tr "\\n" "," | sed "s/,$//" || true)',
-            'printf "SNAPSHOT_ID=%s\\nALL_SNAPSHOTS=%s\\n" "$SNAP_ID" "$ALL_SNAPS" > /dev/termination-log',
-        ],
-    )
-
-    return ["/bin/sh", "-c", "\n".join(script_lines)]
-
-
 def create_cronjob(config: JobConfig, schedule: str) -> V1CronJob:
     """Create a Kubernetes CronJob that backs up a single PVC with restic."""
     env = build_restic_env(config.repo, config.secret_name, config.pvc_name, config.pvc_namespace)
-    cmd = build_backup_command(config.retention, config.repo.insecure_tls)
+    env += entrypoint_env(
+        "backup",
+        insecure_tls=config.repo.insecure_tls,
+        retention=config.retention,
+    )
 
     volumes = [
         V1Volume(
@@ -110,7 +83,6 @@ def create_cronjob(config: JobConfig, schedule: str) -> V1CronJob:
     container = V1Container(
         name="restic-backup",
         image=config.image,
-        command=cmd,
         env=env,
         volume_mounts=mounts,
         security_context=container_security_context(),
