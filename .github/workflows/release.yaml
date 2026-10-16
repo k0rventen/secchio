@@ -90,13 +90,13 @@ jobs:
 
   # 3. Rebuild the charts index with chart-releaser.
   release:
-    needs: version-check
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -106,9 +106,10 @@ jobs:
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
       - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.7.0
+        uses: bitdeps/helm-oci-charts-releaser@v0.1.5
         with:
-          packages_with_index: true
-          skip_upload: true
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+            oci_registry: ghcr.io/${{ github.repository_owner }}
+            oci_username: ${{ github.repository_owner }}
+            oci_password: ${{ secrets.GITHUB_TOKEN }}
+            github_token: ${{ secrets.GITHUB_TOKEN }}
+            skip_gh_release: true

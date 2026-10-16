@@ -27,8 +27,15 @@ jobs:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
     -
-      name: Build and push
+      name: Build and push operator
       uses: docker/build-push-action@v7
       with:
         push: true
-        tags: ghcr.io/${{ github.repository }}:latest
+        tags: ghcr.io/${{ github.repository }}-operator:latest
+    -
+      name: Build and push restic
+      uses: docker/build-push-action@v7
+      with:
+        context: ./restic-pod
+        push: true
+        tags: ghcr.io/${{ github.repository }}-restic:latest
