@@ -18,7 +18,7 @@ TLS_FLAG=""
 if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   timeout 10s restic $TLS_FLAG snapshots --json >/dev/null 2>&1 || restic $TLS_FLAG init
 
-  restic $TLS_FLAG backup /data --quiet --json > /tmp/backup.json
+  restic $TLS_FLAG backup /data --quiet --no-scan --json > /tmp/backup.json
   cat /tmp/backup.json
   SNAP_ID="$(jq -r 'select(.message_type == "summary") | .snapshot_id' /tmp/backup.json)"
 
