@@ -1,5 +1,7 @@
-# values used in the testing cluster with tilt
 operator:
   image: gitea.cocointhe.cloud/coco/secchio-operator
-  tag: latest
-  resticImage: gitea.cocointhe.cloud/coco/secchio-restic:latest
+  tag: v0.7.0
+
+restic:
+  image: gitea.cocointhe.cloud/coco/secchio-restic
+  tag: v0.7.0

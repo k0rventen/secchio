@@ -1,8 +1,9 @@
 # Default values for secchio.
 
 operator:
-  # Pin this to an immutable tag or digest in production.
   image: ghcr.io/k0rventen/secchio-operator
   tag: v0.7.0
-  # Image the backup/restore Job pods use to run restic.
-  resticImage: ghcr.io/k0rventen/secchio-restic:latest
+
+restic:
+  image: ghcr.io/k0rventen/secchio-restic
+  tag: v0.7.0

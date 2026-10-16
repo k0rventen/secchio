@@ -22,7 +22,7 @@ spec:
           image: "{{ .Values.operator.image }}:{{ .Values.operator.tag }}"
           env:
             - name: RESTIC_IMAGE
-              value: "{{ .Values.operator.resticImage }}"
+              value: "{{ .Values.restic.image }}:{{ .Values.restic.tag }}"
           ports:
           - containerPort: 8000
           securityContext:
