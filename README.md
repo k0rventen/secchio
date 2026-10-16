@@ -64,6 +64,23 @@ Each `Backup` owns a CronJob (namespace = the PVC's namespace). Each `Restore`
 owns a one-off Job. The CronJob/Job pods are the only things that touch restic and
 the S3 repository.
 
+### Quickstart
+
+Deploy the operator
+```
+helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.7.1
+```
+
+The operator should start, and you can access the ui with a port-forward:
+
+```
+kubectl port-forward -n secchio-system svc/secchio-ui 8000:8000
+```
+open http://localhost:8000
+
+
+You can then create a BackupSchedule object. Have a look at tests/test-manifest.yaml as an example.
+
 ### Local development with Tilt
 
 ```bash

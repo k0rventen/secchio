@@ -1,6 +1,6 @@
 apiVersion: v2
 name: secchio
-description: A Kubernetes PVC backup operator
+description: K8s PVC backup&restore operator
 type: application
 version: 0.7.1
 appVersion: "0.7.1"
@@ -10,3 +10,4 @@ sources:
 keywords:
 - backup
 - restore
+icon: https://raw.githubusercontent.com/k0rventen/secchio/refs/heads/main/docs/icon.svg
