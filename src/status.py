@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from kubernetes.client import CustomObjectsApi, V1Job
@@ -24,6 +25,7 @@ from common import (
     CRD_PLURAL_RESTORES,
     CRD_VERSION,
     LABEL_BACKUP,
+    LABEL_RESTORE,
     extract_backup_name,
     extract_restore_name,
     extract_schedule_name,
@@ -115,6 +117,21 @@ def _job_creation_time(job: V1Job) -> float:
     return 0.0
 
 
+def _parse_timestamp(value: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp (``Z`` or ``+00:00`` offset).
+
+    Kubernetes emits ``...Z`` while :func:`common.now_iso` emits ``...+00:00``;
+    comparing the raw strings would mis-order the same instant, so callers compare
+    the parsed values instead. Returns ``None`` for empty or unparseable input.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def job_status(job: JobStatus) -> None:
     """Route a Job outcome to the Backup or Restore resource that owns it."""
     if not job.namespace:
@@ -128,9 +145,11 @@ def job_status(job: JobStatus) -> None:
 def backup_status(name: str, namespace: str) -> None:
     """Sync a Backup's status from its most recent Job."""
     try:
+        # Restore Jobs also carry LABEL_BACKUP (the source Backup), so exclude them
+        # explicitly; otherwise the newest Restore Job could shadow the real one.
         jobs = k8s.get_batch_api().list_namespaced_job(
             namespace=namespace,
-            label_selector=f"{LABEL_BACKUP}={name}",
+            label_selector=f"{LABEL_BACKUP}={name},!{LABEL_RESTORE}",
         )
         if not jobs.items:
             return
@@ -189,7 +208,7 @@ def _sync_backup_from_job(job: JobStatus, backup_name: str) -> None:
             phase=BackupPhase.COMPLETED,
             last_backup_time=job.completion_time or now_iso(),
             last_snapshot_id=info.snapshot_id,
-            snapshot_ids=info.snapshots,
+            snapshots=info.snapshots,
             message="Backup completed successfully",
         )
     elif job.failed:
@@ -198,7 +217,7 @@ def _sync_backup_from_job(job: JobStatus, backup_name: str) -> None:
         status = BackupStatus(
             phase=BackupPhase.FAILED,
             last_backup_time=job.start_time or now_iso(),
-            snapshot_ids=info.snapshots,
+            snapshots=info.snapshots,
             message=f"Backup failed: {reason}",
         )
     elif job.active:
@@ -222,9 +241,9 @@ def _update_backup_status(
     status: BackupStatus,
 ) -> None:
     """Patch a Backup's status, keeping snapshot history when the new status has none."""
-    if not status.snapshot_ids:
+    if not status.snapshots:
         previous = _read_backup_status(custom_api, name, namespace)
-        status.snapshot_ids = previous.snapshot_ids
+        status.snapshots = previous.snapshots
         if not status.last_snapshot_id:
             status.last_snapshot_id = previous.last_snapshot_id
 
@@ -271,6 +290,7 @@ def reconcile_schedule_status(custom_api: CustomObjectsApi, schedule_name: str) 
         failed = 0
         running = 0
         latest_backup_time = ""
+        latest_backup_dt: datetime | None = None
 
         for item in items:
             backup = Backup.from_crd(item)
@@ -282,9 +302,9 @@ def reconcile_schedule_status(custom_api: CustomObjectsApi, schedule_name: str) 
             elif phase == BackupPhase.RUNNING:
                 running += 1
 
-            if backup.status.last_backup_time and (
-                not latest_backup_time or backup.status.last_backup_time > latest_backup_time
-            ):
+            parsed = _parse_timestamp(backup.status.last_backup_time)
+            if parsed is not None and (latest_backup_dt is None or parsed > latest_backup_dt):
+                latest_backup_dt = parsed
                 latest_backup_time = backup.status.last_backup_time
 
         all_ok = total > 0 and healthy == total

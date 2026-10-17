@@ -245,19 +245,21 @@
             border: 1px solid var(--danger-border);
         }
 
-        /* Snapshots Pills */
-        .snap-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-        .snap-pill {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 1px 6px;
-            font-size: 0.75rem;
-            font-family: monospace;
-            color: var(--text-muted);
-            cursor: pointer;
+        /* Snapshots table */
+        .snap-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.8rem; }
+        .snap-table th {
+            text-align: left;
+            padding: 4px 8px;
+            color: var(--text-faint);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
         }
-        .snap-pill:hover { border-color: var(--primary); color: var(--primary); }
+        .snap-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
+        .snap-table tr:last-child td { border-bottom: none; }
+        .snap-table .snap-id { font-family: monospace; color: var(--text-muted); }
+        .snap-table .snap-time { color: var(--text-muted); white-space: nowrap; }
+        .snap-table .snap-actions { text-align: right; }
+        .snap-empty { margin-top: 8px; font-size: 0.8rem; color: var(--text-faint); font-style: italic; }
 
         /* Table layout for Restores */
         .data-table {
@@ -522,6 +524,23 @@
         </div>
     </div>
 
+    <!-- Confirm Delete Restore Modal -->
+    <div class="modal-overlay" id="confirm-delete-restore-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Delete Restore</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeDeleteRestoreModal()">✕</button>
+            </div>
+            <div class="confirm-body">
+                <p>Delete restore <strong id="confirm-delete-restore-name"></strong>? This removes the Restore object and its Job.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteRestoreModal()">Cancel</button>
+                <button type="button" class="btn btn-outline-danger" id="btn-confirm-delete-restore" onclick="confirmDeleteRestore()">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirm Backup Modal -->
     <div class="modal-overlay" id="confirm-backup-modal">
         <div class="modal">
@@ -688,10 +707,7 @@
         function renderBackupItem(b) {
             const phase = b.phase || 'Pending';
             const lastBackup = b.last_backup_time ? new Date(b.last_backup_time).toLocaleString() : 'Never';
-            const snapshotId = b.last_snapshot_id || 'None';
-            const snapshotList = (b.snapshot_ids && b.snapshot_ids.length > 0)
-                ? b.snapshot_ids.map(sid => `<span class="snap-pill" title="Click to restore this snapshot" onclick="openRestoreModalForSnapshot(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(sid)})">${escapeHtml(sid)}</span>`).join('')
-                : '';
+            const snapshots = [...(b.snapshots || [])].sort((x, y) => (y.time || '').localeCompare(x.time || ''));
 
             return `
             <div class="backup-item">
@@ -703,17 +719,33 @@
                     <div class="backup-meta-row">
                         <div class="meta-item"><strong>Backup CR:</strong> <code>${escapeHtml(b.name)}</code></div>
                         <div class="meta-item"><strong>Last Run:</strong> ${escapeHtml(lastBackup)}</div>
-                        <div class="meta-item"><strong>Latest Snapshot:</strong> <code>${escapeHtml(snapshotId)}</code></div>
                     </div>
-                    ${snapshotList ? `<div class="snap-list"><span class="label">Snapshots:</span> ${snapshotList}</div>` : ''}
+                    ${renderSnapshotTable(b, snapshots)}
                     ${phase === 'Failed' && b.message ? `<div class="alert-box"><strong>Failure Reason:</strong> ${escapeHtml(b.message)}</div>` : ''}
                 </div>
                 <div class="backup-actions">
                     <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(b.pvc_namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.namespace)}, ${jsArg(b.name)})">▶ Trigger Backup</button>
-                    <button class="btn btn-primary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.snapshot_ids || [])})">↺ Restore</button>
+                    <button class="btn btn-primary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(snapshots)})">↺ Restore</button>
                 </div>
             </div>
             `;
+        }
+
+        function renderSnapshotTable(b, snapshots) {
+            if (!snapshots.length) {
+                return '<div class="snap-empty">No snapshots recorded yet.</div>';
+            }
+            const rows = snapshots.map(s => `
+                <tr>
+                    <td class="snap-id"><code>${escapeHtml(s.id)}</code></td>
+                    <td class="snap-time">${escapeHtml(formatSnapTime(s.time))}</td>
+                    <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModalForSnapshot(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)})">↺ Restore</button></td>
+                </tr>`).join('');
+            return `
+                <table class="snap-table">
+                    <thead><tr><th>Snapshot</th><th>Time</th><th></th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
         }
 
         function renderRestores(restores) {
@@ -734,6 +766,7 @@
                         <th>Status</th>
                         <th>Time</th>
                         <th>Details</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -752,6 +785,7 @@
                             <td>${phaseBadge(phase)}</td>
                             <td><small>${escapeHtml(timeStr)}</small></td>
                             <td><small style="color: ${phase === 'Failed' ? 'var(--danger)' : 'var(--text-muted)'};">${escapeHtml(r.message || '-')}</small></td>
+                            <td><button class="btn btn-outline-danger btn-sm" onclick="openDeleteRestoreModal(${jsArg(r.namespace)}, ${jsArg(r.name)})">Delete</button></td>
                         </tr>
                         `;
                     }).join('')}
@@ -787,13 +821,47 @@
             document.getElementById('confirm-backup-modal').style.display = 'none';
         }
 
+        function openDeleteRestoreModal(namespace, name) {
+            const modal = document.getElementById('confirm-delete-restore-modal');
+            document.getElementById('confirm-delete-restore-name').textContent = `${namespace} / ${name}`;
+            modal.dataset.restoreNamespace = namespace;
+            modal.dataset.restoreName = name;
+            modal.style.display = 'flex';
+        }
+
+        function closeDeleteRestoreModal() {
+            document.getElementById('confirm-delete-restore-modal').style.display = 'none';
+        }
+
+        async function confirmDeleteRestore() {
+            const modal = document.getElementById('confirm-delete-restore-modal');
+            const namespace = modal.dataset.restoreNamespace;
+            const name = modal.dataset.restoreName;
+            const btn = document.getElementById('btn-confirm-delete-restore');
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/restores/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to delete restore');
+                showToast(`Restore '${name}' deleted`, 'success');
+                closeDeleteRestoreModal();
+                loadAllData();
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         async function confirmTriggerBackup() {
             const modal = document.getElementById('confirm-backup-modal');
             await triggerBackup(modal.dataset.backupNamespace, modal.dataset.backupName);
             closeBackupConfirmModal();
         }
 
-        function openRestoreModal(backupRef, backupNs, pvcName, snapshotIds) {
+        function openRestoreModal(backupRef, backupNs, pvcName, snapshots) {
             document.getElementById('modal-backup-ref').value = backupRef;
             document.getElementById('modal-backup-ns').value = backupNs;
             document.getElementById('modal-target-pvc').value = pvcName;
@@ -801,11 +869,11 @@
 
             const select = document.getElementById('modal-snapshot-id');
             select.innerHTML = '<option value="latest">latest (most recent)</option>';
-            if (snapshotIds && snapshotIds.length > 0) {
-                snapshotIds.forEach(sid => {
+            if (snapshots && snapshots.length > 0) {
+                snapshots.forEach(s => {
                     const opt = document.createElement('option');
-                    opt.value = sid;
-                    opt.textContent = sid;
+                    opt.value = s.id;
+                    opt.textContent = s.time ? `${s.id} (${formatSnapTime(s.time)})` : s.id;
                     select.appendChild(opt);
                 });
             }
@@ -814,7 +882,7 @@
         }
 
         function openRestoreModalForSnapshot(backupRef, backupNs, pvcName, specificSnapId) {
-            openRestoreModal(backupRef, backupNs, pvcName, [specificSnapId]);
+            openRestoreModal(backupRef, backupNs, pvcName, [{ id: specificSnapId }]);
             document.getElementById('modal-snapshot-id').value = specificSnapId;
         }
 
@@ -861,6 +929,12 @@
             const div = document.createElement('div');
             div.textContent = String(text);
             return div.innerHTML;
+        }
+
+        function formatSnapTime(time) {
+            if (!time) return '';
+            const d = new Date(time);
+            return isNaN(d.getTime()) ? time : d.toLocaleString();
         }
 
         // Initial Load & Auto-refresh Polling

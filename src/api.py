@@ -3,7 +3,7 @@
 Provides endpoints to list BackupSchedules, Backups, and Restores,
 and trigger manual backups and restores (from the UI)
 
-Frontend is server as a staticfile directly with fastapi
+Frontend is served as a staticfile directly with fastapi
 """
 
 from __future__ import annotations
@@ -48,6 +48,15 @@ static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+def _load_index_html() -> str:
+    """Read the UI once at startup; fall back to a placeholder if it is missing."""
+    index = static_dir / "index.html"
+    return index.read_text() if index.exists() else "no index.html"
+
+
+_INDEX_HTML = _load_index_html()
+
+
 class CreateRestoreRequest(BaseModel):
     backup_ref: str
     backup_namespace: str = ""
@@ -81,7 +90,7 @@ def _backup_view(backup: Backup) -> dict[str, Any]:
         "phase": str(backup.status.phase),
         "last_backup_time": backup.status.last_backup_time,
         "last_snapshot_id": backup.status.last_snapshot_id,
-        "snapshot_ids": backup.status.snapshot_ids,
+        "snapshots": [s.model_dump() for s in backup.status.snapshots],
         "message": backup.status.message,
         "cronjob_name": make_cronjob_name(backup.name),
     }
@@ -142,18 +151,7 @@ def _schedule_views() -> list[dict[str, Any]]:
 @app.get("/", response_class=HTMLResponse)
 async def read_root() -> str:
     """Serve the main HTML page."""
-    html_file = static_dir / "index.html"
-    if html_file.exists():
-        return html_file.read_text()
-    return """
-    <html>
-        <head><title>Backup Operator UI</title></head>
-        <body>
-            <h1>Backup Operator UI</h1>
-            <p>Static files not found. Please check the deployment.</p>
-        </body>
-    </html>
-    """
+    return _INDEX_HTML
 
 
 @app.get("/schedules")
@@ -280,3 +278,21 @@ async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
         "name": restore_name,
         "namespace": target_ns,
     }
+
+
+@app.delete("/api/restores/{namespace}/{restore_name}")
+async def delete_restore(namespace: str, restore_name: str) -> dict[str, Any]:
+    """Delete a Restore custom resource (its Job is garbage-collected)."""
+    try:
+        get_custom_objects_api().delete_namespaced_custom_object(
+            group=CRD_GROUP,
+            version=CRD_VERSION,
+            namespace=namespace,
+            plural=CRD_PLURAL_RESTORES,
+            name=restore_name,
+        )
+    except ApiException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"Restore '{restore_name}' not found")
+        raise HTTPException(status_code=500, detail=f"Failed to delete Restore: {e}")
+    return {"status": "deleted", "message": f"Restore '{restore_name}' deleted"}

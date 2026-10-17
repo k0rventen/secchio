@@ -34,6 +34,7 @@ from restic import (
     cache_volume,
     container_security_context,
     entrypoint_env,
+    pod_security_context,
 )
 
 
@@ -98,6 +99,7 @@ def create_cronjob(config: JobConfig, schedule: str) -> V1CronJob:
         restart_policy="OnFailure",
         containers=[container],
         volumes=volumes,
+        security_context=pod_security_context(),
         automount_service_account_token=False,
         enable_service_links=False,
     )

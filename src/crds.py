@@ -138,11 +138,18 @@ class BackupSpec(Model):
     secret_name: str = ""
 
 
+class SnapshotInfo(Model):
+    """A restic snapshot as surfaced in status and the UI."""
+
+    id: str = ""
+    time: str = ""
+
+
 class BackupStatus(Model):
     phase: BackupPhase | str = BackupPhase.PENDING
     last_backup_time: str = ""
     last_snapshot_id: str = aliased("lastSnapshotID", default="")
-    snapshot_ids: list[str] = aliased("snapshotIDs", default_factory=list)
+    snapshots: list[SnapshotInfo] = Field(default_factory=list)
     message: str = ""
     reason: str = ""
 

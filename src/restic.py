@@ -17,6 +17,7 @@ from kubernetes.client import (
     V1EmptyDirVolumeSource,
     V1EnvVar,
     V1EnvVarSource,
+    V1Pod,
     V1PodSecurityContext,
     V1SeccompProfile,
     V1SecretKeySelector,
@@ -26,7 +27,7 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException, OpenApiException
 
-from crds import RetentionConfig, S3BackendConfig
+from crds import RetentionConfig, S3BackendConfig, SnapshotInfo
 from k8s import get_core_api
 
 logger = logging.getLogger("restic")
@@ -114,15 +115,23 @@ class TerminationInfo:
     """What a restic Job wrote to its pod's /dev/termination-log."""
 
     snapshot_id: str = ""
-    snapshots: list[str] = field(default_factory=list)
+    snapshots: list[SnapshotInfo] = field(default_factory=list)
     restored_snapshot_id: str = ""
     error: str = ""
+
+
+def _pod_creation_time(pod: V1Pod) -> float:
+    """Sort key for picking the newest pod; missing timestamps sort first."""
+    meta = pod.metadata
+    if meta and meta.creation_timestamp:
+        return meta.creation_timestamp.timestamp()
+    return 0.0
 
 
 def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     """Parse the last pod's termination log for a Job.
 
-    The restic scripts write ``SNAPSHOT_ID=``, ``ALL_SNAPSHOTS=`` and
+    The restic scripts write ``SNAPSHOT_ID=``, ``SNAP=<id> <time>`` and
     ``RESTORED_SNAPSHOT_ID=`` lines to /dev/termination-log, so status can be read
     from the standard Pod API without ``pods/log`` RBAC access.
     """
@@ -135,7 +144,7 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
         if not pods.items:
             return TerminationInfo()
 
-        pod_status = pods.items[-1].status
+        pod_status = max(pods.items, key=_pod_creation_time).status
         statuses = pod_status.container_statuses if pod_status else None
         if not statuses:
             return TerminationInfo()
@@ -150,8 +159,8 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
             match = re.search(r"snapshot\s+([a-fA-F0-9]{8,})\s+saved", message)
             if match:
                 info.snapshot_id = match.group(1)
-        if info.snapshot_id and info.snapshot_id not in info.snapshots:
-            info.snapshots.insert(0, info.snapshot_id)
+        if info.snapshot_id and all(s.id != info.snapshot_id for s in info.snapshots):
+            info.snapshots.insert(0, SnapshotInfo(id=info.snapshot_id))
         if term_state.exit_code != 0:
             info.error = message or f"Container exited with code {term_state.exit_code}"
         return info
@@ -167,9 +176,10 @@ def parse_termination_message(message: str) -> TerminationInfo:
         line = raw.strip()
         if line.startswith("SNAPSHOT_ID="):
             info.snapshot_id = line.removeprefix("SNAPSHOT_ID=").strip()
-        elif line.startswith("ALL_SNAPSHOTS="):
-            ids = line.removeprefix("ALL_SNAPSHOTS=").strip()
-            info.snapshots = [s.strip() for s in ids.split(",") if s.strip()]
+        elif line.startswith("SNAP="):
+            snap_id, _, snap_time = line.removeprefix("SNAP=").strip().partition(" ")
+            if snap_id:
+                info.snapshots.append(SnapshotInfo(id=snap_id, time=snap_time.strip()))
         elif line.startswith("RESTORED_SNAPSHOT_ID="):
             info.restored_snapshot_id = line.removeprefix("RESTORED_SNAPSHOT_ID=").strip()
     return info
