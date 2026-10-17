@@ -207,7 +207,6 @@ def _sync_backup_from_job(job: JobStatus, backup_name: str) -> None:
         status = BackupStatus(
             phase=BackupPhase.COMPLETED,
             last_backup_time=job.completion_time or now_iso(),
-            last_snapshot_id=info.snapshot_id,
             snapshots=info.snapshots,
             message="Backup completed successfully",
         )
@@ -244,8 +243,6 @@ def _update_backup_status(
     if not status.snapshots:
         previous = _read_backup_status(custom_api, name, namespace)
         status.snapshots = previous.snapshots
-        if not status.last_snapshot_id:
-            status.last_snapshot_id = previous.last_snapshot_id
 
     k8s.patch_status(
         custom_api,

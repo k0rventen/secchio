@@ -30,9 +30,6 @@ spec:
         - name: Last Backup
           type: string
           jsonPath: .status.lastBackupTime
-        - name: Snapshot ID
-          type: string
-          jsonPath: .status.lastSnapshotID
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -103,9 +100,6 @@ spec:
                 lastBackupTime:
                   type: string
                   description: Timestamp of last backup completion
-                lastSnapshotID:
-                  type: string
-                  description: Latest restic snapshot ID
                 snapshots:
                   type: array
                   description: Available snapshots in the restic repository (short id + timestamp)
@@ -118,6 +112,9 @@ spec:
                       time:
                         type: string
                         description: Snapshot creation time (RFC3339)
+                      size:
+                        type: integer
+                        description: Total bytes processed for this snapshot
                 message:
                   type: string
                   description: Status or error details

@@ -36,7 +36,7 @@ if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   SNAPS_JSON="$(restic $TLS_FLAG snapshots --json)"
   {
     printf 'SNAPSHOT_ID=%s\n' "$SNAP_SHORT"
-    printf '%s' "$SNAPS_JSON" | jq -r 'sort_by(.time) | reverse | .[] | "SNAP=\(.short_id) \(.time)"'
+    printf '%s' "$SNAPS_JSON" | jq -r 'sort_by(.time) | reverse | .[] | "SNAP=\(.short_id) \(.time) \(.summary.total_bytes_processed)"'
   } > /dev/termination-log
 
 elif [ "${SECCHIO_MODE:-}" = "restore" ]; then

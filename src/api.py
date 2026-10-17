@@ -89,7 +89,6 @@ def _backup_view(backup: Backup) -> dict[str, Any]:
         "schedule_name": backup.labels.get(LABEL_SCHEDULE, ""),
         "phase": str(backup.status.phase),
         "last_backup_time": backup.status.last_backup_time,
-        "last_snapshot_id": backup.status.last_snapshot_id,
         "snapshots": [s.model_dump() for s in backup.status.snapshots],
         "message": backup.status.message,
         "cronjob_name": make_cronjob_name(backup.name),

@@ -143,12 +143,12 @@ class SnapshotInfo(Model):
 
     id: str = ""
     time: str = ""
+    size: int = 0
 
 
 class BackupStatus(Model):
     phase: BackupPhase | str = BackupPhase.PENDING
     last_backup_time: str = ""
-    last_snapshot_id: str = aliased("lastSnapshotID", default="")
     snapshots: list[SnapshotInfo] = Field(default_factory=list)
     message: str = ""
     reason: str = ""

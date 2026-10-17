@@ -131,7 +131,7 @@ def _pod_creation_time(pod: V1Pod) -> float:
 def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     """Parse the last pod's termination log for a Job.
 
-    The restic scripts write ``SNAPSHOT_ID=``, ``SNAP=<id> <time>`` and
+    The restic scripts write ``SNAPSHOT_ID=``, ``SNAP=<id> <time> <bytes>`` and
     ``RESTORED_SNAPSHOT_ID=`` lines to /dev/termination-log, so status can be read
     from the standard Pod API without ``pods/log`` RBAC access.
     """
@@ -177,9 +177,11 @@ def parse_termination_message(message: str) -> TerminationInfo:
         if line.startswith("SNAPSHOT_ID="):
             info.snapshot_id = line.removeprefix("SNAPSHOT_ID=").strip()
         elif line.startswith("SNAP="):
-            snap_id, _, snap_time = line.removeprefix("SNAP=").strip().partition(" ")
-            if snap_id:
-                info.snapshots.append(SnapshotInfo(id=snap_id, time=snap_time.strip()))
+            parts = line.removeprefix("SNAP=").strip().split(" ", 2)
+            if parts and parts[0]:
+                snap_time = parts[1] if len(parts) > 1 else ""
+                snap_size = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+                info.snapshots.append(SnapshotInfo(id=parts[0], time=snap_time, size=snap_size))
         elif line.startswith("RESTORED_SNAPSHOT_ID="):
             info.restored_snapshot_id = line.removeprefix("RESTORED_SNAPSHOT_ID=").strip()
     return info

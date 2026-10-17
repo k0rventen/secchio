@@ -6,7 +6,6 @@
     <title>Secchio Backup Operator</title>
     <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
     <style>
-        /* Dark theme is the default — no white mode for the eyes. */
         :root {
             --bg: #0b1120;
             --bg-elevated: #0f172a;
@@ -191,14 +190,24 @@
         .meta-empty { color: var(--text-faint); font-style: italic; }
 
         /* Backups nested table/cards */
-        .section-subtitle {
+        .collapse-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            padding: 0;
+            margin-bottom: 12px;
+            cursor: pointer;
+            font-family: inherit;
             font-size: 0.9rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: var(--text-muted);
-            margin-bottom: 12px;
         }
+        .collapse-toggle:hover { color: var(--text-main); }
+        .collapse-toggle .chevron { font-size: 0.7rem; }
 
         .backup-item {
             background: var(--bg);
@@ -206,34 +215,33 @@
             border-radius: var(--radius);
             padding: 14px 18px;
             margin-bottom: 10px;
+        }
+        .backup-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            flex-wrap: wrap;
+            align-items: center;
             gap: 12px;
+            flex-wrap: wrap;
         }
-        .backup-info { flex: 1; min-width: 0; }
         .backup-pvc { font-weight: 600; font-size: 0.95rem; }
-        /* Backup item rows: one field per line, no crowding */
         .backup-pvc-row {
             display: flex;
             align-items: center;
             gap: 10px;
             flex-wrap: wrap;
         }
-        .backup-meta-row { margin-top: 10px; }
+        .backup-meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 20px;
+            margin-top: 8px;
+        }
         .backup-meta-row .meta-item {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             font-size: 0.825rem;
             color: var(--text-muted);
-            padding: 3px 0;
         }
-        .snap-list .label {
-            font-size: 0.75rem;
-            color: var(--text-faint);
-        }
-        .backup-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 
         .alert-box {
             background: var(--danger-bg);
@@ -258,6 +266,7 @@
         .snap-table tr:last-child td { border-bottom: none; }
         .snap-table .snap-id { font-family: monospace; color: var(--text-muted); }
         .snap-table .snap-time { color: var(--text-muted); white-space: nowrap; }
+        .snap-table .snap-size { color: var(--text-muted); white-space: nowrap; }
         .snap-table .snap-actions { text-align: right; }
         .snap-empty { margin-top: 8px; font-size: 0.8rem; color: var(--text-faint); font-style: italic; }
 
@@ -560,6 +569,7 @@
 
     <script>
         let currentTab = 'schedules';
+        const expandedSchedules = new Set();
 
         function switchTab(tab) {
             currentTab = tab;
@@ -568,6 +578,19 @@
             document.getElementById('tab-btn-schedules').classList.toggle('active', tab === 'schedules');
             document.getElementById('tab-btn-restores').classList.toggle('active', tab === 'restores');
             loadAllData();
+        }
+
+        function toggleScheduleBackups(btn) {
+            const name = btn.dataset.schedule;
+            const list = btn.parentElement.querySelector('.backups-collapsible');
+            const expanded = expandedSchedules.has(name);
+            if (expanded) {
+                expandedSchedules.delete(name);
+            } else {
+                expandedSchedules.add(name);
+            }
+            list.style.display = expanded ? 'none' : 'block';
+            btn.querySelector('.chevron').textContent = expanded ? '▸' : '▾';
         }
 
         function showToast(message, type = 'info') {
@@ -664,13 +687,13 @@
                     : (s.matched_pvcs && s.matched_pvcs.length > 0)
                         ? s.matched_pvcs.map(p => `
                             <div class="backup-item">
-                                <div class="backup-info">
-                                    <div class="backup-pvc">${escapeHtml(p.namespace)} / ${escapeHtml(p.name)}</div>
-                                    <div class="backup-meta">PVC matched, waiting for backup initialization...</div>
-                                </div>
+                                <div class="backup-pvc">${escapeHtml(p.namespace)} / ${escapeHtml(p.name)}</div>
+                                <div class="backup-meta">PVC matched, waiting for backup initialization...</div>
                             </div>
                         `).join('')
                         : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
+                const backupCount = (s.backups && s.backups.length) || (s.matched_pvcs && s.matched_pvcs.length) || 0;
+                const expanded = expandedSchedules.has(s.name);
 
                 const scheduleHtml = chips([chip(s.schedule || '-')]);
                 const repoHtml = chips([chip(s.repo?.endpoint || '-')]);
@@ -696,8 +719,13 @@
                             <div class="meta-item"><strong>Summary:</strong>${summaryHtml}</div>
                         </div>
 
-                        <div class="section-subtitle">Target PVC Backups (${(s.backups && s.backups.length) || (s.matched_pvcs && s.matched_pvcs.length) || 0})</div>
-                        ${backupsHtml}
+                        <button class="collapse-toggle" data-schedule="${escapeHtml(s.name)}" onclick="toggleScheduleBackups(this)">
+                            <span class="chevron">${expanded ? '▾' : '▸'}</span>
+                            Target PVC Backups (${backupCount})
+                        </button>
+                        <div class="backups-collapsible" style="display: ${expanded ? 'block' : 'none'};">
+                            ${backupsHtml}
+                        </div>
                     </div>
                 </div>
                 `;
@@ -711,22 +739,19 @@
 
             return `
             <div class="backup-item">
-                <div class="backup-info">
+                <div class="backup-header">
                     <div class="backup-pvc-row">
                         <span class="backup-pvc">${escapeHtml(b.pvc_namespace)} / ${escapeHtml(b.pvc_name)}</span>
                         ${phaseBadge(phase)}
                     </div>
-                    <div class="backup-meta-row">
-                        <div class="meta-item"><strong>Backup CR:</strong> <code>${escapeHtml(b.name)}</code></div>
-                        <div class="meta-item"><strong>Last Run:</strong> ${escapeHtml(lastBackup)}</div>
-                    </div>
-                    ${renderSnapshotTable(b, snapshots)}
-                    ${phase === 'Failed' && b.message ? `<div class="alert-box"><strong>Failure Reason:</strong> ${escapeHtml(b.message)}</div>` : ''}
-                </div>
-                <div class="backup-actions">
                     <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(b.pvc_namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.namespace)}, ${jsArg(b.name)})">▶ Trigger Backup</button>
-                    <button class="btn btn-primary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(snapshots)})">↺ Restore</button>
                 </div>
+                <div class="backup-meta-row">
+                    <div class="meta-item"><strong>Backup CR:</strong> <code>${escapeHtml(b.name)}</code></div>
+                    <div class="meta-item"><strong>Last Run:</strong> ${escapeHtml(lastBackup)}</div>
+                </div>
+                ${renderSnapshotTable(b, snapshots)}
+                ${phase === 'Failed' && b.message ? `<div class="alert-box"><strong>Failure Reason:</strong> ${escapeHtml(b.message)}</div>` : ''}
             </div>
             `;
         }
@@ -739,11 +764,12 @@
                 <tr>
                     <td class="snap-id"><code>${escapeHtml(s.id)}</code></td>
                     <td class="snap-time">${escapeHtml(formatSnapTime(s.time))}</td>
+                    <td class="snap-size">${escapeHtml(formatBytes(s.size))}</td>
                     <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModalForSnapshot(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)})">↺ Restore</button></td>
                 </tr>`).join('');
             return `
                 <table class="snap-table">
-                    <thead><tr><th>Snapshot</th><th>Time</th><th></th></tr></thead>
+                    <thead><tr><th>Snapshot</th><th>Time</th><th>Size</th><th></th></tr></thead>
                     <tbody>${rows}</tbody>
                 </table>`;
         }
@@ -935,6 +961,19 @@
             if (!time) return '';
             const d = new Date(time);
             return isNaN(d.getTime()) ? time : d.toLocaleString();
+        }
+
+        function formatBytes(bytes) {
+            const n = Number(bytes) || 0;
+            if (n < 1024) return `${n} B`;
+            const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+            let value = n / 1024;
+            let i = 0;
+            while (value >= 1024 && i < units.length - 1) {
+                value /= 1024;
+                i++;
+            }
+            return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
         }
 
         // Initial Load & Auto-refresh Polling
