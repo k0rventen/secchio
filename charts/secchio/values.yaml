@@ -2,8 +2,8 @@
 
 operator:
   image: ghcr.io/k0rventen/secchio-operator
-  tag: v0.8.0
+  tag: v0.8.1
 
 restic:
   image: ghcr.io/k0rventen/secchio-restic
-  tag: v0.8.0
+  tag: v0.8.1

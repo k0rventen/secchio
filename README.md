@@ -67,7 +67,7 @@ the S3 repository.
 
 Deploy the operator
 ```sh
-helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.8.0
+helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.8.1
 ```
 
 The operator should start, and you can access the ui with a port-forward:
