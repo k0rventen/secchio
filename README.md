@@ -1,7 +1,7 @@
 
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/k0rventen/secchio/refs/heads/main/docs/icon.svg" width="256" alt="Secchio Logo">
+<img src="docs/icon.svg" width="256" alt="Secchio Logo">
 
 <h1>secchio</h1>
 
@@ -25,7 +25,7 @@ storage using [restic](https://restic.net/), and restores them on demand.
 It is built on [kopf](https://kopf.readthedocs.io/) for talking with k8s, 
 and ships a small web UI from where you can view/trigger backups and restores.
 
-![ui](https://raw.githubusercontent.com/k0rventen/secchio/refs/heads/main/docs/ui.png)
+![ui](docs/ui.png)
 
 When starting the project, I had a few things in mind:
 - Resilience: the operator should only orchestrates native Kubernetes objects. Meaning if the operator is down, existing backups are still being done

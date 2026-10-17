@@ -25,6 +25,8 @@ spec:
           env:
             - name: RESTIC_IMAGE
               value: "{{ .Values.restic.image }}:{{ .Values.restic.tag }}"
+            - name: OPERATOR_VERSION
+              value: "{{ .Chart.AppVersion }}"
           ports:
           - name: http
             containerPort: 8000
