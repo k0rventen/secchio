@@ -30,5 +30,5 @@ ENV PYTHONUNBUFFERED=1
 ENV PATH="/app/.venv/bin:$PATH"
 USER 1000
 
-# start operator cluster-wide
-CMD ["kopf", "run", "-A", "handlers.py"]
+# start operator cluster-wide, exposing kopf's liveness endpoint for probes
+CMD ["kopf", "run", "-A", "--liveness=http://0.0.0.0:8080/healthz", "handlers.py"]

@@ -7,11 +7,9 @@ requires-python = ">=3.14"
 dependencies = [
     "kopf>=1.37",
     "kubernetes>=30.0",
-    "python-dateutil>=2.8",
     "fastapi>=0.100",
     "uvicorn>=0.23",
     "pydantic>=2.0",
-    "setuptools>=84.0.0",
 ]
 
 [project.optional-dependencies]
@@ -24,15 +22,15 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=84", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 plugins = ["pydantic.mypy"]
 warn_return_any = true
 warn_unused_configs = true
