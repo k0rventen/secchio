@@ -86,9 +86,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: helm chart prep
-        run: |
-          cp README.md charts/secchio
+
       - name: Run chart-releaser
         uses: bitdeps/helm-oci-charts-releaser@v0.1.5
         with:
