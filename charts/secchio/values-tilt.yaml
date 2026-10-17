@@ -1,7 +1,0 @@
-operator:
-  image: gitea.cocointhe.cloud/coco/secchio-operator
-  tag: v0.7.0
-
-restic:
-  image: gitea.cocointhe.cloud/coco/secchio-restic
-  tag: v0.7.0

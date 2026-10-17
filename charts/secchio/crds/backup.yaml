@@ -106,11 +106,18 @@ spec:
                 lastSnapshotID:
                   type: string
                   description: Latest restic snapshot ID
-                snapshotIDs:
+                snapshots:
                   type: array
-                  description: List of available snapshot IDs in restic repository
+                  description: Available snapshots in the restic repository (short id + timestamp)
                   items:
-                    type: string
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        description: Short restic snapshot ID
+                      time:
+                        type: string
+                        description: Snapshot creation time (RFC3339)
                 message:
                   type: string
                   description: Status or error details

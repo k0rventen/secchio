@@ -7,6 +7,8 @@ metadata:
     app: secchio-operator
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: secchio-operator
@@ -24,7 +26,16 @@ spec:
             - name: RESTIC_IMAGE
               value: "{{ .Values.restic.image }}:{{ .Values.restic.tag }}"
           ports:
-          - containerPort: 8000
+          - name: http
+            containerPort: 8000
+          - name: health
+            containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
           securityContext:
             runAsUser: 1000
             readOnlyRootFilesystem: true
@@ -37,7 +48,7 @@ spec:
               cpu: 100m
               memory: 128Mi
             limits:
-              cpu: 500m
+              cpu: 1
               memory: 256Mi
           volumeMounts:
             - name: tmp
