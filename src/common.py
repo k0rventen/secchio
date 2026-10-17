@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 # Operator configuration (set from the Helm chart as env vars)
 RESTIC_IMAGE = os.environ.get("RESTIC_IMAGE", "ghcr.io/k0rventen/secchio-restic:latest")
+OPERATOR_VERSION = os.environ.get("OPERATOR_VERSION", "dev")
 
 # CRD Schema Constants
 CRD_GROUP = "secchio.cocointhe.cloud"
@@ -24,8 +25,6 @@ LABEL_SCHEDULE = "secchio.cocointhe.cloud/schedule"
 LABEL_BACKUP = "secchio.cocointhe.cloud/backup"
 LABEL_RESTORE = "secchio.cocointhe.cloud/restore"
 LABEL_PVC_NAME = "secchio.cocointhe.cloud/pvc-name"
-LABEL_PVC_NAMESPACE = "secchio.cocointhe.cloud/pvc-namespace"
-LABEL_COMPONENT = "app.kubernetes.io/component"
 
 # Status reasons
 REASON_SECRET_MISSING = "SecretNotFound"
@@ -48,30 +47,28 @@ def make_restore_job_name(restore_name: str) -> str:
 
 
 # Label helpers
-def make_backup_labels(
-    schedule_name: str,
-    pvc_name: str,
-    pvc_namespace: str = "",
-) -> dict[str, str]:
-    """Generate standard labels for a Backup custom resource."""
-    labels = {
+def _base_labels() -> dict[str, str]:
+    """Labels common to every object the operator creates."""
+    return {
         "app": "secchio",
         LABEL_APP: LABEL_APP_VALUE,
         LABEL_MANAGED_BY: LABEL_MANAGED_BY_VALUE,
+    }
+
+
+def make_backup_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
+    """Generate standard labels for a Backup custom resource."""
+    return {
+        **_base_labels(),
         LABEL_SCHEDULE: schedule_name,
         LABEL_PVC_NAME: pvc_name,
     }
-    if pvc_namespace:
-        labels[LABEL_PVC_NAMESPACE] = pvc_namespace
-    return labels
 
 
 def make_cronjob_labels(schedule_name: str, backup_name: str, pvc_name: str) -> dict[str, str]:
     """Generate standard labels for a backup CronJob."""
     return {
-        "app": "secchio",
-        LABEL_APP: LABEL_APP_VALUE,
-        LABEL_MANAGED_BY: LABEL_MANAGED_BY_VALUE,
+        **_base_labels(),
         LABEL_SCHEDULE: schedule_name,
         LABEL_BACKUP: backup_name,
         LABEL_PVC_NAME: pvc_name,
@@ -81,10 +78,7 @@ def make_cronjob_labels(schedule_name: str, backup_name: str, pvc_name: str) -> 
 def make_restore_labels(restore_name: str, backup_name: str, target_pvc: str) -> dict[str, str]:
     """Generate standard labels for a restore Job."""
     return {
-        "app": "secchio",
-        LABEL_APP: LABEL_APP_VALUE,
-        LABEL_MANAGED_BY: LABEL_MANAGED_BY_VALUE,
-        LABEL_COMPONENT: "restore",
+        **_base_labels(),
         LABEL_RESTORE: restore_name,
         LABEL_BACKUP: backup_name,
         LABEL_PVC_NAME: target_pvc,

@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from kubernetes import client
-from kubernetes.client import BatchV1Api, CustomObjectsApi, V1CronJob, V1Job
+from kubernetes.client import BatchV1Api, CustomObjectsApi, V1CronJob, V1Job, V1OwnerReference
 from kubernetes.client.exceptions import ApiException, OpenApiException
 
 from common import (
@@ -44,6 +44,25 @@ def get_custom_objects_api() -> CustomObjectsApi:
 def get_batch_api() -> BatchV1Api:
     """Return a cached BatchV1Api client."""
     return BatchV1Api()
+
+
+# Generic listing
+def list_cluster_custom(
+    api: CustomObjectsApi,
+    plural: str,
+    label_selector: str = "",
+) -> list[dict[str, Any]]:
+    """List a cluster-scoped custom resource, returning ``[]`` on failure."""
+    params: dict[str, Any] = {"group": CRD_GROUP, "version": CRD_VERSION, "plural": plural}
+    if label_selector:
+        params["label_selector"] = label_selector
+    try:
+        result: Any = api.list_cluster_custom_object(**params)
+    except ApiException:
+        logger.exception("Failed to list %s", plural)
+        return []
+    items = result.get("items", []) if isinstance(result, dict) else []
+    return [item for item in items if isinstance(item, dict)]
 
 
 # Status
@@ -95,6 +114,22 @@ def patch_status(
 
 
 # Workloads
+def owner_reference(api_version: str, kind: str, name: str, uid: str) -> list[V1OwnerReference]:
+    """A controller owner reference, or ``[]`` when name or uid is missing."""
+    if not name or not uid:
+        return []
+    return [
+        V1OwnerReference(
+            api_version=api_version,
+            kind=kind,
+            name=name,
+            uid=uid,
+            controller=True,
+            block_owner_deletion=True,
+        )
+    ]
+
+
 def create_or_update_cronjob(batch_api: BatchV1Api, cronjob: V1CronJob) -> None:
     """Create a CronJob, replacing it if it already exists."""
     namespace = (cronjob.metadata.namespace or "") if cronjob.metadata else ""
@@ -213,22 +248,7 @@ def list_backups_for_schedule(
     schedule_name: str,
 ) -> list[dict[str, Any]]:
     """List the Backup custom resources that belong to a schedule."""
-    try:
-        result: Any = custom_api.list_cluster_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
-            label_selector=f"{LABEL_SCHEDULE}={schedule_name}",
-        )
-        if isinstance(result, dict):
-            items = result.get("items", [])
-            if isinstance(items, list):
-                return list(items)
-    except ApiException:
-        logger.exception("Failed to list backups for schedule %s", schedule_name)
-        return []
-    else:
-        return []
+    return list_cluster_custom(custom_api, CRD_PLURAL_BACKUPS, f"{LABEL_SCHEDULE}={schedule_name}")
 
 
 def find_backup(
@@ -315,17 +335,4 @@ def list_pvcs_by_selector(api: client.CoreV1Api, selector: dict[str, str]) -> li
 
 def list_backup_schedules(api: CustomObjectsApi) -> list[dict[str, Any]]:
     """List all BackupSchedule custom resources across the cluster."""
-    try:
-        result: Any = api.list_cluster_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPSCHEDULES,
-        )
-        if isinstance(result, dict):
-            items = result.get("items", [])
-            return list(items) if isinstance(items, list) else []
-    except ApiException:
-        logger.exception("Failed to list BackupSchedule resources:")
-        return []
-    else:
-        return []
+    return list_cluster_custom(api, CRD_PLURAL_BACKUPSCHEDULES)

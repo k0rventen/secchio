@@ -7,7 +7,7 @@ so `alias_generator` does the translation
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -21,6 +21,43 @@ class Model(BaseModel):
         populate_by_name=True,
         extra="ignore",
     )
+
+
+class CRModel(Model):
+    """A top-level custom resource: metadata plus spec and status.
+
+    Subclasses declare their concrete ``spec``/``status`` fields; this base only
+    carries the metadata and the shared CR (de)serialization helpers.
+    """
+
+    name: str = ""
+    namespace: str = ""
+    uid: str = ""
+    labels: dict[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def from_crd(cls, item: dict[str, Any]) -> Self:
+        """Build a model from a raw CR dict (``metadata``/``spec``/``status``)."""
+        meta = item.get("metadata") or {}
+        return cls.model_validate(
+            {
+                "name": meta.get("name", ""),
+                "namespace": meta.get("namespace", ""),
+                "uid": meta.get("uid", ""),
+                "labels": meta.get("labels") or {},
+                "spec": item.get("spec") or {},
+                "status": item.get("status") or {},
+            },
+        )
+
+    def to_crd_body(self, group: str, version: str) -> dict[str, Any]:
+        """The create/patch body for this CR (metadata + spec, no status)."""
+        return {
+            "apiVersion": f"{group}/{version}",
+            "kind": type(self).__name__,
+            "metadata": {"name": self.name, "namespace": self.namespace, "labels": self.labels},
+            "spec": self.model_dump(by_alias=True, include={"spec"})["spec"],
+        }
 
 
 def aliased(wire_name: str, **field_kwargs: Any) -> Any:
@@ -154,35 +191,9 @@ class BackupStatus(Model):
     reason: str = ""
 
 
-class Backup(Model):
-    name: str = ""
-    namespace: str = ""
-    uid: str = ""
-    labels: dict[str, str] = Field(default_factory=dict)
+class Backup(CRModel):
     spec: BackupSpec = Field(default_factory=BackupSpec)
     status: BackupStatus = Field(default_factory=BackupStatus)
-
-    @classmethod
-    def from_crd(cls, item: dict[str, Any]) -> Backup:
-        meta = item.get("metadata") or {}
-        return cls.model_validate(
-            {
-                "name": meta.get("name", ""),
-                "namespace": meta.get("namespace", ""),
-                "uid": meta.get("uid", ""),
-                "labels": meta.get("labels") or {},
-                "spec": item.get("spec") or {},
-                "status": item.get("status") or {},
-            },
-        )
-
-    def to_crd_body(self, group: str, version: str) -> dict[str, Any]:
-        return {
-            "apiVersion": f"{group}/{version}",
-            "kind": "Backup",
-            "metadata": {"name": self.name, "namespace": self.namespace, "labels": self.labels},
-            "spec": self.spec.model_dump(by_alias=True),
-        }
 
 
 # --- Restore (namespaced) -------------------------------------------------
@@ -205,24 +216,6 @@ class RestoreStatus(Model):
     message: str = ""
 
 
-class Restore(Model):
-    name: str = ""
-    namespace: str = ""
-    uid: str = ""
-    labels: dict[str, str] = Field(default_factory=dict)
+class Restore(CRModel):
     spec: RestoreSpec = Field(default_factory=RestoreSpec)
     status: RestoreStatus = Field(default_factory=RestoreStatus)
-
-    @classmethod
-    def from_crd(cls, item: dict[str, Any]) -> Restore:
-        meta = item.get("metadata") or {}
-        return cls.model_validate(
-            {
-                "name": meta.get("name", ""),
-                "namespace": meta.get("namespace", ""),
-                "uid": meta.get("uid", ""),
-                "labels": meta.get("labels") or {},
-                "spec": item.get("spec") or {},
-                "status": item.get("status") or {},
-            },
-        )

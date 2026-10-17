@@ -14,11 +14,15 @@ from dataclasses import dataclass, field
 
 from kubernetes.client import (
     V1Capabilities,
+    V1Container,
     V1EmptyDirVolumeSource,
     V1EnvVar,
     V1EnvVarSource,
+    V1PersistentVolumeClaimVolumeSource,
     V1Pod,
     V1PodSecurityContext,
+    V1PodSpec,
+    V1ResourceRequirements,
     V1SeccompProfile,
     V1SecretKeySelector,
     V1SecurityContext,
@@ -195,6 +199,53 @@ def cache_volume() -> V1Volume:
 def cache_mount() -> V1VolumeMount:
     """Mount point for :func:`cache_volume`."""
     return V1VolumeMount(name="restic-cache", mount_path=CACHE_DIR)
+
+
+def build_restic_pod(
+    *,
+    container_name: str,
+    image: str,
+    env: list[V1EnvVar],
+    pvc_name: str,
+    read_only: bool,
+) -> V1PodSpec:
+    """Build the hardened pod spec shared by backup and restore Jobs.
+
+    Mounts the PVC at ``/data`` (read-only for backups, read-write for restores)
+    next to a writable cache volume, and applies the shared security context.
+    """
+    volumes = [
+        V1Volume(
+            name=f"pvc-{pvc_name}",
+            persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=pvc_name),
+        ),
+        cache_volume(),
+    ]
+    mounts = [
+        V1VolumeMount(name=f"pvc-{pvc_name}", mount_path="/data", read_only=read_only),
+        cache_mount(),
+    ]
+    container = V1Container(
+        name=container_name,
+        image=image,
+        env=env,
+        volume_mounts=mounts,
+        security_context=container_security_context(),
+        termination_message_path="/dev/termination-log",
+        termination_message_policy="FallbackToLogsOnError",
+        resources=V1ResourceRequirements(
+            requests={"cpu": "100m", "memory": "128Mi"},
+            limits={"cpu": "1000m", "memory": "512Mi"},
+        ),
+    )
+    return V1PodSpec(
+        restart_policy="OnFailure",
+        containers=[container],
+        volumes=volumes,
+        security_context=pod_security_context(),
+        automount_service_account_token=False,
+        enable_service_links=False,
+    )
 
 
 def pod_security_context() -> V1PodSecurityContext:

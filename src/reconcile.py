@@ -110,7 +110,7 @@ def _desired_backups(
                 schedule=schedule_spec.schedule,
                 secret_name=schedule_spec.repo.secret_name,
             ),
-            labels=make_backup_labels(schedule_name, pvc_name, pvc_namespace),
+            labels=make_backup_labels(schedule_name, pvc_name),
         )
     return desired
 

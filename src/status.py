@@ -12,9 +12,9 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from kubernetes.client import CustomObjectsApi, V1Job
+from kubernetes.client import ApiClient, CustomObjectsApi, V1Job
 from kubernetes.client.exceptions import ApiException, OpenApiException
 
 import k8s
@@ -44,6 +44,9 @@ from crds import (
 from restic import extract_termination_info
 
 logger = logging.getLogger("status")
+
+# Bare client used only to normalize kubernetes-client objects to plain dicts.
+_api_client = ApiClient()
 
 
 @dataclass
@@ -78,21 +81,9 @@ class JobStatus:
 
     @classmethod
     def from_job(cls, job: V1Job) -> JobStatus:
-        meta = job.metadata
-        status = job.status
-        return cls(
-            name=(meta.name if meta else None) or "",
-            namespace=(meta.namespace if meta else None) or "",
-            labels=(meta.labels if meta else None) or {},
-            active=(status.active if status else None) or 0,
-            succeeded=(status.succeeded if status else None) or 0,
-            failed=(status.failed if status else None) or 0,
-            start_time=status.start_time.isoformat() if status and status.start_time else "",
-            completion_time=(
-                status.completion_time.isoformat() if status and status.completion_time else ""
-            ),
-            failure_reason=_failed_reason(status.conditions if status else []),
-        )
+        """Normalize a kubernetes-client Job object via the dict path."""
+        body = cast(Mapping[str, Any], _api_client.sanitize_for_serialization(job))
+        return cls.from_kopf_body(body)
 
 
 def _failed_reason(conditions: Any) -> str:
