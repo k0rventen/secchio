@@ -55,8 +55,10 @@
 
         .brand { display: flex; align-items: center; gap: 12px; }
         .brand-icon { width: 48px; height: 48px; flex-shrink: 0; }
+        .title-row { display: flex; align-items: baseline; gap: 8px; }
         .title-group h1 { font-size: 1.6rem; font-weight: 700; color: var(--text-main); }
         .title-group p { font-size: 0.875rem; color: var(--text-muted); }
+        .app-version { font-size: 0.8rem; font-weight: 600; color: var(--text-faint); }
 
         .header-actions { display: flex; gap: 12px; align-items: center; }
 
@@ -340,18 +342,33 @@
             color: var(--text-main);
         }
 
-        .form-group { margin-bottom: 16px; }
-        .form-label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
-        .form-control {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            font-size: 0.9rem;
-            outline: none;
+        /* Restore source -> destination mapping */
+        .restore-mapping { display: flex; align-items: stretch; gap: 14px; }
+        .restore-col { flex: 1; min-width: 0; }
+        .restore-col-title {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-faint);
+            margin-bottom: 10px;
         }
-        .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 2px var(--focus-ring); }
-        .form-help { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+        .restore-field { margin-bottom: 10px; }
+        .restore-field:last-child { margin-bottom: 0; }
+        .restore-label { display: block; font-size: 0.7rem; color: var(--text-faint); margin-bottom: 2px; }
+        .restore-value {
+            display: block;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: var(--text-main);
+            word-break: break-all;
+        }
+        .restore-arrow {
+            display: flex;
+            align-items: center;
+            color: var(--text-faint);
+            font-size: 1.3rem;
+        }
 
         /* Toast notifications */
         .toast-container {
@@ -437,7 +454,10 @@
             <div class="brand">
                 <img class="brand-icon" src="/static/icon.svg" alt="Secchio logo">
                 <div class="title-group">
-                    <h1>Secchio</h1>
+                    <div class="title-row">
+                        <h1>Secchio</h1>
+                        <span class="app-version" id="app-version"></span>
+                    </div>
                     <p>Kubernetes PVC Backup and Restore Operator</p>
                 </div>
             </div>
@@ -502,27 +522,30 @@
             </div>
             <form id="restore-form" onsubmit="submitRestore(event)">
                 <div class="modal-body">
-                    <div class="form-group">
-                        <label class="form-label">Source Backup</label>
-                        <input type="text" class="form-control" id="modal-backup-ref" readonly style="background: var(--bg-elevated); color: var(--text-main);">
-                        <input type="hidden" id="modal-backup-ns">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Snapshot to Restore</label>
-                        <select class="form-control" id="modal-snapshot-id"></select>
-                        <div class="form-help">Choose "latest" or a specific snapshot ID from this backup repository.</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Target PVC Name</label>
-                        <input type="text" class="form-control" id="modal-target-pvc" required placeholder="e.g. app-data-restore">
-                        <div class="form-help">The PersistentVolumeClaim to restore the data into.</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Target Namespace</label>
-                        <input type="text" class="form-control" id="modal-target-ns" required placeholder="e.g. default">
+                    <div class="restore-mapping">
+                        <div class="restore-col">
+                            <div class="restore-col-title">Source</div>
+                            <div class="restore-field">
+                                <span class="restore-label">Snapshot</span>
+                                <span class="restore-value" id="modal-snapshot-id"></span>
+                            </div>
+                            <div class="restore-field">
+                                <span class="restore-label">Date</span>
+                                <span class="restore-value" id="modal-snapshot-time"></span>
+                            </div>
+                        </div>
+                        <div class="restore-arrow">→</div>
+                        <div class="restore-col">
+                            <div class="restore-col-title">Destination</div>
+                            <div class="restore-field">
+                                <span class="restore-label">Namespace</span>
+                                <span class="restore-value" id="modal-target-ns"></span>
+                            </div>
+                            <div class="restore-field">
+                                <span class="restore-label">PVC</span>
+                                <span class="restore-value" id="modal-target-pvc"></span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -568,11 +591,9 @@
     </div>
 
     <script>
-        let currentTab = 'schedules';
         const expandedSchedules = new Set();
 
         function switchTab(tab) {
-            currentTab = tab;
             document.getElementById('tab-schedules').style.display = tab === 'schedules' ? 'block' : 'none';
             document.getElementById('tab-restores').style.display = tab === 'restores' ? 'block' : 'none';
             document.getElementById('tab-btn-schedules').classList.toggle('active', tab === 'schedules');
@@ -623,6 +644,19 @@
 
         function chips(parts) {
             return `<span class="meta-chips">${parts.join('')}</span>`;
+        }
+
+        async function loadVersion() {
+            try {
+                const res = await fetch('/api/version');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.version) {
+                    document.getElementById('app-version').textContent = `v${data.version}`;
+                }
+            } catch (err) {
+                console.error('Failed to load version:', err);
+            }
         }
 
         async function loadAllData() {
@@ -734,7 +768,7 @@
 
         function renderBackupItem(b) {
             const phase = b.phase || 'Pending';
-            const lastBackup = b.last_backup_time ? new Date(b.last_backup_time).toLocaleString() : 'Never';
+            const lastBackup = formatDateTime(b.last_backup_time) || 'Never';
             const snapshots = [...(b.snapshots || [])].sort((x, y) => (y.time || '').localeCompare(x.time || ''));
 
             return `
@@ -763,9 +797,9 @@
             const rows = snapshots.map(s => `
                 <tr>
                     <td class="snap-id"><code>${escapeHtml(s.id)}</code></td>
-                    <td class="snap-time">${escapeHtml(formatSnapTime(s.time))}</td>
+                    <td class="snap-time">${escapeHtml(formatDateTime(s.time))}</td>
                     <td class="snap-size">${escapeHtml(formatBytes(s.size))}</td>
-                    <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModalForSnapshot(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)})">↺ Restore</button></td>
+                    <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)}, ${jsArg(s.time)})">↺ Restore</button></td>
                 </tr>`).join('');
             return `
                 <table class="snap-table">
@@ -799,8 +833,8 @@
                     ${restores.map(r => {
                         const phase = r.phase || 'Pending';
                         const timeStr = r.completion_time
-                            ? `Completed: ${new Date(r.completion_time).toLocaleTimeString()}`
-                            : (r.start_time ? `Started: ${new Date(r.start_time).toLocaleTimeString()}` : '-');
+                            ? `Completed: ${formatDateTime(r.completion_time)}`
+                            : (r.start_time ? `Started: ${formatDateTime(r.start_time)}` : '-');
 
                         return `
                         <tr>
@@ -887,29 +921,18 @@
             closeBackupConfirmModal();
         }
 
-        function openRestoreModal(backupRef, backupNs, pvcName, snapshots) {
-            document.getElementById('modal-backup-ref').value = backupRef;
-            document.getElementById('modal-backup-ns').value = backupNs;
-            document.getElementById('modal-target-pvc').value = pvcName;
-            document.getElementById('modal-target-ns').value = backupNs;
-
-            const select = document.getElementById('modal-snapshot-id');
-            select.innerHTML = '<option value="latest">latest (most recent)</option>';
-            if (snapshots && snapshots.length > 0) {
-                snapshots.forEach(s => {
-                    const opt = document.createElement('option');
-                    opt.value = s.id;
-                    opt.textContent = s.time ? `${s.id} (${formatSnapTime(s.time)})` : s.id;
-                    select.appendChild(opt);
-                });
-            }
-
-            document.getElementById('restore-modal').style.display = 'flex';
-        }
-
-        function openRestoreModalForSnapshot(backupRef, backupNs, pvcName, specificSnapId) {
-            openRestoreModal(backupRef, backupNs, pvcName, [{ id: specificSnapId }]);
-            document.getElementById('modal-snapshot-id').value = specificSnapId;
+        function openRestoreModal(backupRef, backupNs, pvcName, snapId, snapTime) {
+            const modal = document.getElementById('restore-modal');
+            modal.dataset.backupRef = backupRef;
+            modal.dataset.backupNs = backupNs;
+            modal.dataset.targetPvc = pvcName;
+            modal.dataset.targetNs = backupNs;
+            modal.dataset.snapshotId = snapId;
+            document.getElementById('modal-snapshot-id').textContent = snapId || 'latest';
+            document.getElementById('modal-snapshot-time').textContent = formatDateTime(snapTime) || '—';
+            document.getElementById('modal-target-ns').textContent = backupNs;
+            document.getElementById('modal-target-pvc').textContent = pvcName;
+            modal.style.display = 'flex';
         }
 
         function closeRestoreModal() {
@@ -922,12 +945,13 @@
             btn.disabled = true;
             btn.textContent = 'Initiating...';
 
+            const modal = document.getElementById('restore-modal');
             const payload = {
-                backup_ref: document.getElementById('modal-backup-ref').value,
-                backup_namespace: document.getElementById('modal-backup-ns').value,
-                target_pvc: document.getElementById('modal-target-pvc').value.trim(),
-                target_pvc_namespace: document.getElementById('modal-target-ns').value.trim(),
-                snapshot_id: document.getElementById('modal-snapshot-id').value,
+                backup_ref: modal.dataset.backupRef,
+                backup_namespace: modal.dataset.backupNs,
+                target_pvc: modal.dataset.targetPvc,
+                target_pvc_namespace: modal.dataset.targetNs,
+                snapshot_id: modal.dataset.snapshotId,
             };
 
             try {
@@ -957,10 +981,13 @@
             return div.innerHTML;
         }
 
-        function formatSnapTime(time) {
-            if (!time) return '';
-            const d = new Date(time);
-            return isNaN(d.getTime()) ? time : d.toLocaleString();
+        // International format: 24-hour clock, day/month/year.
+        function formatDateTime(value) {
+            if (!value) return '';
+            const d = new Date(value);
+            if (isNaN(d.getTime())) return value;
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}h${pad(d.getMinutes())}`;
         }
 
         function formatBytes(bytes) {
@@ -977,6 +1004,7 @@
         }
 
         // Initial Load & Auto-refresh Polling
+        loadVersion();
         loadAllData();
         setInterval(loadAllData, 30000);
     </script>

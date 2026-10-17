@@ -27,10 +27,11 @@ from common import (
     CRD_PLURAL_RESTORES,
     CRD_VERSION,
     LABEL_SCHEDULE,
+    OPERATOR_VERSION,
     make_cronjob_name,
     make_restore_labels,
 )
-from crds import Backup, PVCSelector, Restore
+from crds import Backup, PVCSelector, Restore, RestoreSpec
 from k8s import (
     get_batch_api,
     get_core_api,
@@ -86,31 +87,26 @@ def _backup_view(backup: Backup) -> dict[str, Any]:
         "namespace": backup.namespace,
         "pvc_name": backup.spec.pvc_name,
         "pvc_namespace": backup.spec.pvc_namespace,
-        "schedule_name": backup.labels.get(LABEL_SCHEDULE, ""),
         "phase": str(backup.status.phase),
         "last_backup_time": backup.status.last_backup_time,
         "snapshots": [s.model_dump() for s in backup.status.snapshots],
         "message": backup.status.message,
-        "cronjob_name": make_cronjob_name(backup.name),
     }
 
 
-def _restore_view(restore: Restore, item: dict[str, Any]) -> dict[str, Any]:
+def _restore_view(restore: Restore) -> dict[str, Any]:
     return {
         "name": restore.name,
         "namespace": restore.namespace,
         "target_pvc": restore.spec.target_pvc,
         "target_pvc_namespace": restore.spec.target_pvc_namespace,
         "backup_ref": restore.spec.backup_ref,
-        "source_pvc": restore.spec.source_pvc,
-        "source_pvc_namespace": restore.spec.source_pvc_namespace,
         "snapshot_id": restore.spec.snapshot_id,
         "phase": str(restore.status.phase),
         "start_time": restore.status.start_time,
         "completion_time": restore.status.completion_time,
         "restored_snapshot_id": restore.status.snapshot_id,
         "message": restore.status.message,
-        "creation_timestamp": item.get("metadata", {}).get("creationTimestamp", ""),
     }
 
 
@@ -132,7 +128,6 @@ def _schedule_views() -> list[dict[str, Any]]:
         views.append(
             {
                 "name": name,
-                "pvc_selector": spec.get("pvc", {}),
                 "schedule": spec.get("schedule", ""),
                 "repo": spec.get("repo", {}),
                 "retention": spec.get("retention", {}),
@@ -153,27 +148,16 @@ async def read_root() -> str:
     return _INDEX_HTML
 
 
-@app.get("/schedules")
+@app.get("/api/version")
+async def get_version() -> dict[str, str]:
+    """Return the operator version, for display in the UI."""
+    return {"version": OPERATOR_VERSION}
+
+
 @app.get("/api/schedules")
 async def list_schedules() -> list[dict[str, Any]]:
     """List all BackupSchedules with matched PVCs and associated child Backups."""
     return _schedule_views()
-
-
-@app.get("/schedules/{schedule_name}")
-@app.get("/api/schedules/{schedule_name}")
-async def get_schedule(schedule_name: str) -> dict[str, Any]:
-    """Get a single BackupSchedule by name."""
-    for view in _schedule_views():
-        if view["name"] == schedule_name:
-            return view
-    raise HTTPException(status_code=404, detail="Schedule not found")
-
-
-@app.get("/api/backups")
-async def list_backups() -> list[dict[str, Any]]:
-    """List all Backup custom resources across the cluster."""
-    return [_backup_view(Backup.from_crd(item)) for item in _list_custom(CRD_PLURAL_BACKUPS)]
 
 
 @app.post("/api/backups/{namespace}/{backup_name}/trigger")
@@ -230,9 +214,7 @@ async def trigger_backup(namespace: str, backup_name: str) -> dict[str, Any]:
 @app.get("/api/restores")
 async def list_restores() -> list[dict[str, Any]]:
     """List all Restore custom resources across the cluster."""
-    return [
-        _restore_view(Restore.from_crd(item), item) for item in _list_custom(CRD_PLURAL_RESTORES)
-    ]
+    return [_restore_view(Restore.from_crd(item)) for item in _list_custom(CRD_PLURAL_RESTORES)]
 
 
 @app.post("/api/restores")
@@ -243,23 +225,18 @@ async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
     target_pvc = req.target_pvc
 
     restore_name = f"restore-{target_pvc}"[:45] + f"-{int(time.time())}"
-
-    restore_body = {
-        "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
-        "kind": "Restore",
-        "metadata": {
-            "name": restore_name,
-            "namespace": target_ns,
-            "labels": make_restore_labels(restore_name, req.backup_ref, target_pvc),
-        },
-        "spec": {
-            "backupRef": req.backup_ref,
-            "targetPVC": target_pvc,
-            "targetPVCNamespace": target_ns,
-            "sourcePVCNamespace": req.backup_namespace,
-            "snapshotID": req.snapshot_id or "latest",
-        },
-    }
+    restore = Restore(
+        name=restore_name,
+        namespace=target_ns,
+        labels=make_restore_labels(restore_name, req.backup_ref, target_pvc),
+        spec=RestoreSpec(
+            backup_ref=req.backup_ref,
+            target_pvc=target_pvc,
+            target_pvc_namespace=target_ns,
+            source_pvc_namespace=req.backup_namespace,
+            snapshot_id=req.snapshot_id or "latest",
+        ),
+    )
 
     try:
         custom_api.create_namespaced_custom_object(
@@ -267,7 +244,7 @@ async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
             version=CRD_VERSION,
             namespace=target_ns,
             plural=CRD_PLURAL_RESTORES,
-            body=restore_body,
+            body=restore.to_crd_body(CRD_GROUP, CRD_VERSION),
         )
     except ApiException as e:
         raise HTTPException(status_code=500, detail=f"Failed to create Restore resource: {e}")
