@@ -21,13 +21,23 @@ if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   restic $TLS_FLAG backup /data --quiet --no-scan --json > /tmp/backup.json
   cat /tmp/backup.json
   SNAP_ID="$(jq -r 'select(.message_type == "summary") | .snapshot_id' /tmp/backup.json)"
+  # restic's summary reports the full 64-char id; use the short form for display.
+  SNAP_SHORT="$(printf '%.8s' "$SNAP_ID")"
 
   if [ -n "${SECCHIO_RETENTION:-}" ]; then
-    restic $TLS_FLAG forget --prune $SECCHIO_RETENTION
+    # A retention failure must not fail the backup: the snapshot was already
+    # written. Warn and continue so the Job still reports success.
+    restic $TLS_FLAG forget --prune $SECCHIO_RETENTION \
+      || echo "warning: restic forget failed; backup snapshot was still created" >&2
   fi
 
-  ALL_SNAPS="$(restic $TLS_FLAG snapshots --json | jq -r '[.[].short_id] | join(",")')"
-  printf 'SNAPSHOT_ID=%s\nALL_SNAPSHOTS=%s\n' "$SNAP_ID" "$ALL_SNAPS" > /dev/termination-log
+  # One SNAP=<short-id> <time> line per snapshot (newest first), so a truncated
+  # termination log only loses the oldest entries rather than the whole list.
+  SNAPS_JSON="$(restic $TLS_FLAG snapshots --json)"
+  {
+    printf 'SNAPSHOT_ID=%s\n' "$SNAP_SHORT"
+    printf '%s' "$SNAPS_JSON" | jq -r 'sort_by(.time) | reverse | .[] | "SNAP=\(.short_id) \(.time)"'
+  } > /dev/termination-log
 
 elif [ "${SECCHIO_MODE:-}" = "restore" ]; then
   SNAP="${SECCHIO_SNAPSHOT:-latest}"
@@ -35,7 +45,8 @@ elif [ "${SECCHIO_MODE:-}" = "restore" ]; then
   # the snapshot exists, so we fail fast instead of mid-restore
   RESOLVED="$(timeout 10s restic $TLS_FLAG snapshots "$SNAP" --json | jq -r '.[0].short_id')"
   [ -n "$RESOLVED" ] || { echo "snapshot '$SNAP' not found in repository" >&2; exit 1; }
-  restic $TLS_FLAG restore "$RESOLVED" --delete --target / -i /data --json
+  rm -rf data/*
+  restic $TLS_FLAG restore "$RESOLVED" --quiet --delete --target / -i /data --json
   printf 'RESTORED_SNAPSHOT_ID=%s\n' "$RESOLVED" > /dev/termination-log
 
 else
