@@ -19,6 +19,7 @@ dev = [
     "pytest-mock>=3.12",
     "ruff>=0.5",
     "mypy>=1.10",
+    "pyright>=1.1.414",
 ]
 
 [build-system]
@@ -45,3 +46,4 @@ venvPath = "."
 venv = ".venv"
 include = ["src", "tests"]
 typeCheckingMode = "standard"
+

@@ -1,10 +1,10 @@
 # base image
-FROM python:3.14-alpine AS base
+FROM python:3.14.8-alpine AS base
 
 # build stage with uv
 FROM base AS builder
 # copy uv bins
-COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/
 
 # install dependencies into venv
 WORKDIR /app
