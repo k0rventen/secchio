@@ -109,6 +109,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Pin image digests
+        env:
+          OPERATOR_TAG: ${{ github.ref_name }}@${{ needs.oci-images-build.outputs.operator_digest }}
+          RESTIC_TAG: ${{ github.ref_name }}@${{ needs.oci-images-build.outputs.restic_digest }}
+        run: |
+          if [ -z "${{ needs.oci-images-build.outputs.operator_digest }}" ] || \
+             [ -z "${{ needs.oci-images-build.outputs.restic_digest }}" ]; then
+            echo "::error::image digests are missing"
+            exit 1
+          fi
+          yq -i '.operator.tag = strenv(OPERATOR_TAG) | .restic.tag = strenv(RESTIC_TAG)' \
+            charts/secchio/values.yaml
+          grep -E '^  tag:' charts/secchio/values.yaml
+
       - name: Run chart-releaser
         uses: bitdeps/helm-oci-charts-releaser@caedceea2a5ab997c7e5469a999811dbb3d5b070 # v0.1.5
         with:
@@ -123,7 +137,7 @@ jobs:
     needs:
       - version-check
       - oci-images-build
-      -  helm-chart-build
+      - helm-chart-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
