@@ -15,7 +15,7 @@ RUN uv sync --no-dev --locked --no-install-project
 # tests stage
 FROM base AS tests
 RUN apk add make libstdc++ shellcheck
-COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /bin/
 
 WORKDIR /tests
 COPY pyproject.toml uv.lock .
