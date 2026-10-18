@@ -9,7 +9,22 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56
 # install dependencies into venv
 WORKDIR /app
 COPY pyproject.toml uv.lock .
-RUN uv sync --no-dev --locked --compile-bytecode --no-install-project
+RUN uv sync --no-dev --locked --no-install-project
+
+
+# tests stage
+FROM base AS tests
+RUN apk add make libstdc++ shellcheck
+COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /bin/
+
+WORKDIR /tests
+COPY pyproject.toml uv.lock .
+RUN uv sync --all-extras --locked --no-install-project
+COPY src/ src
+COPY tests/ tests
+COPY restic-pod/ restic-pod
+
+RUN make -f tests/Makefile verify
 
 
 # runtime stage

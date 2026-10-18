@@ -1,0 +1,110 @@
+# Test manifests for secchio
+# Creates a pod, PVC (longhorn), BackupSchedule, and mock S3 secret
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-notes-app
+  namespace: production
+  labels:
+    app: python-notes-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-notes-app
+  template:
+    metadata:
+      labels:
+        app: python-notes-app
+    spec:
+      containers:
+        - name: python-notes-app
+          image: alpine
+          command:
+            - sh
+          args:
+            - -c
+            - while :; do echo creating a file; dd if=/dev/random of=/data/$(date +%Y%m%d.%H%M) bs=1000 count=100000; sleep 60; done
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: python-notes-app
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sdfsdfdsf
+  namespace: testing
+  labels:
+    app: python-notes-app
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: restic-s3-secret
+  namespace: production
+type: Opaque
+stringData:
+  RESTIC_PASSWORD: "changeme-restic-password"
+  AWS_ACCESS_KEY_ID: "changeme-access-key-id"
+  AWS_SECRET_ACCESS_KEY: "changeme-secret-access-key"
+---
+apiVersion: secchio.cocointhe.cloud/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: python-notes
+spec:
+  pvc:
+    selector:
+      app: python-notes-app
+  schedule: "*/10 * * * *"
+  repo:
+    endpoint: 192.168.1.20/backups
+    secretName: restic-s3-secret
+    insecureTLS: true
+  retention:
+    keepDaily: 4
+---
+# Example target PVC for testing restores
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: python-notes-app-restore-data
+#   namespace: backup-test
+# spec:
+#   accessModes:
+#     - ReadWriteOnce
+#   storageClassName: longhorn
+#   resources:
+#     requests:
+#       storage: 2Gi
+---
+# apiVersion: secchio.cocointhe.cloud/v1alpha1
+# kind: Restore
+# metadata:
+#   name: python-notes-app-restore
+#   namespace: backup-test
+# spec:
+#   backupRef: python-notes-app-backup-backup-python-notes-app-data
+#   targetPVC: python-notes-app-data
+#   targetPVCNamespace: backup-test
+#   snapshotID: b8ce225e

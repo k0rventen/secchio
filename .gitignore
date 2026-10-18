@@ -4,5 +4,4 @@ __pycache__/
 .ruff_cache/
 .venv/
 secchio.egg-info/
-tests/
 docs/
