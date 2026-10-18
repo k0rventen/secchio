@@ -10,6 +10,9 @@
 #
 # Restic connection details come from the usual RESTIC_* / AWS_* env vars.
 set -eu
+# BusyBox ash (Alpine's /bin/sh) supports pipefail; ShellCheck's POSIX
+# dialect does not know that.
+# shellcheck disable=SC3040
 set -o pipefail
 
 TLS_FLAG=""
@@ -25,8 +28,8 @@ if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   SNAP_SHORT="$(printf '%.8s' "$SNAP_ID")"
 
   if [ -n "${SECCHIO_RETENTION:-}" ]; then
-    # A retention failure must not fail the backup: the snapshot was already
-    # written. Warn and continue so the Job still reports success.
+    # SECCHIO_RETENTION is a space-separated flag list and must word-split.
+    # shellcheck disable=SC2086
     restic $TLS_FLAG forget --prune $SECCHIO_RETENTION \
       || echo "warning: restic forget failed; backup snapshot was still created" >&2
   fi
