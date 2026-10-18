@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "docker:pinDigests", ":semanticCommits","helpers:pinGitHubActionDigests"],
+
+  "packageRules": [
+
+    // disallow digest updates as tags should be immutable
+    { "matchUpdateTypes": ["pin"], "enabled": true },
+    { "matchUpdateTypes": ["digest"], "enabled": false }
+  ]
+}
