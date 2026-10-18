@@ -2,8 +2,8 @@ apiVersion: v2
 name: secchio
 description: K8s PVC backup&restore operator
 type: application
-version: 0.8.1
-appVersion: "0.8.1"
+version: 0.8.2
+appVersion: "0.8.2"
 home: https://github.com/k0rventen/secchio
 sources:
 - https://github.com/k0rventen/secchio
