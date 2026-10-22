@@ -1,11 +1,15 @@
-# base image
-FROM python:3.14.8-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS base
+# base image for all stages
+FROM python:3.15.1-alpine@sha256:54448f67d7c31c39e5cdd3ea2d6382395ce142806c284425f8e897d78a0465b3 AS base
 
-# build stage with uv
-FROM base AS builder
+
+# intermediary step with UV
+FROM base AS uv
 # copy uv bins
-COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /bin/
 
+
+# build stage
+FROM uv AS builder
 # install dependencies into venv
 WORKDIR /app
 COPY pyproject.toml uv.lock .
@@ -13,10 +17,10 @@ RUN uv sync --no-dev --locked --no-install-project
 
 
 # tests stage
-FROM base AS tests
+FROM uv AS tests
 RUN apk add make libstdc++ shellcheck
-COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /bin/
 
+# install all deps for testing
 WORKDIR /tests
 COPY pyproject.toml uv.lock .
 RUN uv sync --all-extras --locked --no-install-project
@@ -24,6 +28,7 @@ COPY src/ src
 COPY tests/ tests
 COPY restic-pod/ restic-pod
 
+# run tests
 RUN make -f tests/Makefile verify
 
 
