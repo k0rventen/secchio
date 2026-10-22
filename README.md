@@ -8,6 +8,7 @@
 K8s Backup & Restore operator
 </div>
 
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/secchio)](https://artifacthub.io/packages/search?repo=secchio)
 ## rationale
 
 ```
@@ -67,7 +68,7 @@ the S3 repository.
 
 Deploy the operator
 ```sh
-helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.8.2
+helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.8.3
 ```
 
 The operator should start, and you can access the ui with a port-forward:
