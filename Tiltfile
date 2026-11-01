@@ -1,4 +1,5 @@
 allow_k8s_contexts('k3s')
+allow_k8s_contexts('vcluster_vcluster_vcluster_mora')
 
 k8s_yaml(local('helm template --include-crds charts/secchio/ -n secchio-system --set operator.image=gitea.cocointhe.cloud/coco/secchio-operator --set restic.image=gitea.cocointhe.cloud/coco/secchio-restic --set=restic.tag=latest'))
 docker_build("gitea.cocointhe.cloud/coco/secchio-operator",".")
