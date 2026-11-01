@@ -1105,7 +1105,7 @@ wheels = [
 
 [[package]]
 name = "secchio"
-version = "0.8.3"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
