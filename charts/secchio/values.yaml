@@ -3,7 +3,13 @@
 operator:
   image: ghcr.io/k0rventen/secchio-operator
   tag: v0.8.3
-
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 200Mi
 restic:
   image: ghcr.io/k0rventen/secchio-restic
   tag: v0.8.3

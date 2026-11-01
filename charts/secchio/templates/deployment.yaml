@@ -46,12 +46,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 1
-              memory: 256Mi
+            {{ toYaml .Values.operator.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

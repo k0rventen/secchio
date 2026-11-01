@@ -21,12 +21,15 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
+        - name: Schedule
+          type: string
+          jsonPath: .spec.scheduleName
+        - name: PVC
+          type: string
+          jsonPath: .spec.pvcName
         - name: Target PVC
           type: string
           jsonPath: .spec.targetPVC
-        - name: Backup Ref
-          type: string
-          jsonPath: .spec.backupRef
         - name: Phase
           type: string
           jsonPath: .status.phase
@@ -45,25 +48,20 @@ spec:
             spec:
               type: object
               required:
-                - targetPVC
-                - targetPVCNamespace
-                - backupRef
+                - scheduleName
+                - pvcName
               properties:
+                scheduleName:
+                  type: string
+                  description: BackupSchedule that owns the source PVC
+                  minLength: 1
+                pvcName:
+                  type: string
+                  description: Source PVC to restore from
+                  minLength: 1
                 targetPVC:
                   type: string
-                  description: Name of the target PVC to restore to
-                targetPVCNamespace:
-                  type: string
-                  description: Namespace of the target PVC
-                backupRef:
-                  type: string
-                  description: Name of the Backup object to restore from
-                sourcePVC:
-                  type: string
-                  description: Optional source PVC name (defaults to backup's PVC)
-                sourcePVCNamespace:
-                  type: string
-                  description: Optional source PVC namespace (defaults to backup's PVC namespace)
+                  description: Target PVC to restore into (defaults to pvcName)
                 snapshotID:
                   type: string
                   description: Optional specific snapshot ID to restore (defaults to latest)
