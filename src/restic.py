@@ -22,6 +22,7 @@ from kubernetes.client import (
     V1Pod,
     V1PodSecurityContext,
     V1PodSpec,
+    V1PodStatus,
     V1ResourceRequirements,
     V1SeccompProfile,
     V1SecretKeySelector,
@@ -116,12 +117,14 @@ def entrypoint_env(
 
 @dataclass
 class TerminationInfo:
-    """What a restic Job wrote to its pod's /dev/termination-log."""
+    """What a restic Job's pod reports: termination log, waiting state, or condition."""
 
     snapshot_id: str = ""
     snapshots: list[SnapshotInfo] = field(default_factory=list)
     restored_snapshot_id: str = ""
     error: str = ""
+    waiting_reason: str = ""
+    waiting_message: str = ""
 
 
 def _pod_creation_time(pod: V1Pod) -> float:
@@ -132,12 +135,22 @@ def _pod_creation_time(pod: V1Pod) -> float:
     return 0.0
 
 
+def _pod_condition_message(pod_status: V1PodStatus) -> str:
+    """The message of the first failing pod condition (e.g. PodScheduled=False)."""
+    for condition in pod_status.conditions or []:
+        if condition.status == "False" and condition.message:
+            return condition.message
+    return ""
+
+
 def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
-    """Parse the last pod's termination log for a Job.
+    """Read the last pod's outcome for a Job.
 
     The restic scripts write ``SNAPSHOT_ID=``, ``SNAP=<id> <time> <bytes>`` and
     ``RESTORED_SNAPSHOT_ID=`` lines to /dev/termination-log, so status can be read
-    from the standard Pod API without ``pods/log`` RBAC access.
+    from the standard Pod API without ``pods/log`` RBAC access. When the container
+    never started, the waiting state (e.g. ``CreateContainerConfigError``) or a
+    failing pod condition is surfaced instead.
     """
     core_api = get_core_api()
     try:
@@ -149,11 +162,25 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
             return TerminationInfo()
 
         pod_status = max(pods.items, key=_pod_creation_time).status
-        statuses = pod_status.container_statuses if pod_status else None
-        if not statuses:
+        if pod_status is None:
             return TerminationInfo()
 
-        term_state = statuses[-1].state.terminated if statuses[-1].state else None
+        statuses = pod_status.container_statuses
+        if not statuses:
+            # The pod never started (e.g. unschedulable); surface its condition.
+            return TerminationInfo(error=_pod_condition_message(pod_status))
+
+        container_status = statuses[-1]
+        state = container_status.state
+        if state and state.waiting:
+            # The container never started (e.g. CreateContainerConfigError for a
+            # missing Secret). There is no termination log to parse.
+            return TerminationInfo(
+                waiting_reason=state.waiting.reason or "",
+                waiting_message=state.waiting.message or "",
+            )
+
+        term_state = state.terminated if state else None
         if not term_state:
             return TerminationInfo()
 
@@ -233,9 +260,11 @@ def build_restic_pod(
         security_context=container_security_context(),
         termination_message_path="/dev/termination-log",
         termination_message_policy="FallbackToLogsOnError",
+        # Resource quantities must be in canonical form: the API server stores
+        # ``1000m`` as ``1``, and the CronJob drift check compares the live spec.
         resources=V1ResourceRequirements(
             requests={"cpu": "100m", "memory": "128Mi"},
-            limits={"cpu": "1000m", "memory": "512Mi"},
+            limits={"cpu": "1", "memory": "512Mi"},
         ),
     )
     return V1PodSpec(

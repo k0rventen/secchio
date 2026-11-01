@@ -1,16 +1,13 @@
-"""FastAPI UI for the backup operator
+"""FastAPI UI for the backup operator.
 
-Provides endpoints to list BackupSchedules, Backups, and Restores,
-and trigger manual backups and restores (from the UI)
-
-Frontend is served as a staticfile directly with fastapi
+Lists BackupSchedules (with their per-PVC status) and Restores, and triggers
+manual backups/restores. The frontend is served as static files.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -23,21 +20,18 @@ from pydantic import BaseModel
 
 from common import (
     CRD_GROUP,
-    CRD_PLURAL_BACKUPS,
     CRD_PLURAL_RESTORES,
     CRD_VERSION,
-    LABEL_SCHEDULE,
+    JOB_TTL_SECONDS,
     OPERATOR_VERSION,
-    make_cronjob_name,
     make_restore_labels,
 )
-from crds import Backup, PVCSelector, Restore, RestoreSpec
+from crds import BackupSchedule, Restore, RestoreSpec
 from k8s import (
+    get_backup_schedule,
     get_batch_api,
-    get_core_api,
     get_custom_objects_api,
     list_backup_schedules,
-    list_pvcs_by_selector,
 )
 
 logger = logging.getLogger("api")
@@ -59,15 +53,15 @@ _INDEX_HTML = _load_index_html()
 
 
 class CreateRestoreRequest(BaseModel):
-    backup_ref: str
-    backup_namespace: str = ""
-    target_pvc: str
-    target_pvc_namespace: str = ""
+    namespace: str
+    schedule_name: str
+    pvc_name: str
+    target_pvc: str = ""
     snapshot_id: str = "latest"
 
 
 def _list_custom(plural: str) -> list[dict[str, Any]]:
-    """List a cluster-scoped custom resource, or ``[]`` on failure."""
+    """List a custom resource across all namespaces, or ``[]`` on failure."""
     try:
         result: Any = get_custom_objects_api().list_cluster_custom_object(
             group=CRD_GROUP,
@@ -81,26 +75,13 @@ def _list_custom(plural: str) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _backup_view(backup: Backup) -> dict[str, Any]:
-    return {
-        "name": backup.name,
-        "namespace": backup.namespace,
-        "pvc_name": backup.spec.pvc_name,
-        "pvc_namespace": backup.spec.pvc_namespace,
-        "phase": str(backup.status.phase),
-        "last_backup_time": backup.status.last_backup_time,
-        "snapshots": [s.model_dump() for s in backup.status.snapshots],
-        "message": backup.status.message,
-    }
-
-
 def _restore_view(restore: Restore) -> dict[str, Any]:
     return {
         "name": restore.name,
         "namespace": restore.namespace,
-        "target_pvc": restore.spec.target_pvc,
-        "target_pvc_namespace": restore.spec.target_pvc_namespace,
-        "backup_ref": restore.spec.backup_ref,
+        "schedule_name": restore.spec.schedule_name,
+        "pvc_name": restore.spec.pvc_name,
+        "target_pvc": restore.spec.target_pvc or restore.spec.pvc_name,
         "snapshot_id": restore.spec.snapshot_id,
         "phase": str(restore.status.phase),
         "start_time": restore.status.start_time,
@@ -111,32 +92,33 @@ def _restore_view(restore: Restore) -> dict[str, Any]:
 
 
 def _schedule_views() -> list[dict[str, Any]]:
-    """BackupSchedules with their matched PVCs and associated child Backups."""
-    core_api = get_core_api()
-
-    backups_by_schedule: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for item in _list_custom(CRD_PLURAL_BACKUPS):
-        backup = Backup.from_crd(item)
-        backups_by_schedule[backup.labels.get(LABEL_SCHEDULE, "")].append(_backup_view(backup))
-
+    """BackupSchedules with their per-PVC status."""
     views = []
     for item in list_backup_schedules(get_custom_objects_api()):
-        spec = item.get("spec", {})
-        name = item.get("metadata", {}).get("name", "")
-        selector = PVCSelector.model_validate(spec.get("pvc") or {})
-        matched = list_pvcs_by_selector(core_api, selector.selector)
+        schedule = BackupSchedule.from_crd(item)
         views.append(
             {
-                "name": name,
-                "schedule": spec.get("schedule", ""),
-                "repo": spec.get("repo", {}),
-                "retention": spec.get("retention", {}),
-                "status": item.get("status", {}),
-                "matched_pvcs": [
-                    {"name": pvc_name, "namespace": pvc_namespace}
-                    for pvc_name, pvc_namespace in matched
+                "name": schedule.name,
+                "namespace": schedule.namespace,
+                "schedule": schedule.spec.schedule,
+                "time_zone": schedule.spec.time_zone,
+                "repo": schedule.spec.repo.model_dump(by_alias=True),
+                "retention": schedule.spec.retention.model_dump(by_alias=True),
+                "status": schedule.status.model_dump(
+                    by_alias=True, mode="json", exclude={"backups"}
+                ),
+                "backups": [
+                    {
+                        "pvc_name": entry.pvc_name,
+                        "cronjob_name": entry.cronjob_name,
+                        "phase": str(entry.phase),
+                        "last_backup_time": entry.last_backup_time,
+                        "snapshots": [snapshot.model_dump() for snapshot in entry.snapshots],
+                        "message": entry.message,
+                        "reason": entry.reason,
+                    }
+                    for entry in schedule.status.backups
                 ],
-                "backups": backups_by_schedule.get(name, []),
             },
         )
     return views
@@ -156,35 +138,35 @@ async def get_version() -> dict[str, str]:
 
 @app.get("/api/schedules")
 async def list_schedules() -> list[dict[str, Any]]:
-    """List all BackupSchedules with matched PVCs and associated child Backups."""
+    """List all BackupSchedules with their per-PVC status."""
     return _schedule_views()
 
 
-@app.post("/api/backups/{namespace}/{backup_name}/trigger")
-async def trigger_backup(namespace: str, backup_name: str) -> dict[str, Any]:
-    """Manually trigger a backup by instantiating a Job from its CronJob."""
+def _trigger_backup_job(namespace: str, cronjob_name: str) -> str:
+    """Instantiate a Job from a CronJob and return the Job name."""
     batch_api = get_batch_api()
-    cronjob_name = make_cronjob_name(backup_name)
     try:
         cronjob = batch_api.read_namespaced_cron_job(name=cronjob_name, namespace=namespace)
     except ApiException as e:
         if e.status == 404:
             raise HTTPException(
                 status_code=404,
-                detail=f"CronJob '{cronjob_name}' not found for backup in namespace '{namespace}'",
+                detail=f"CronJob '{cronjob_name}' not found in namespace '{namespace}'",
             )
         raise HTTPException(status_code=500, detail=f"Failed to read CronJob: {e}")
 
     if not (cronjob.spec and cronjob.spec.job_template):
         raise HTTPException(status_code=500, detail="CronJob template spec is missing")
     template = cronjob.spec.job_template
-    if not template.spec:
+    job_spec = template.spec
+    if job_spec is None:
         raise HTTPException(status_code=500, detail="CronJob template spec is missing")
 
     # Kubernetes names are capped at 63 characters.
-    manual_job_name = f"{backup_name[:40]}-manual-{int(time.time())}"
+    manual_job_name = f"{cronjob_name[:40]}-manual-{int(time.time())}"
     job_labels = dict((template.metadata.labels if template.metadata else None) or {})
 
+    job_spec.ttl_seconds_after_finished = JOB_TTL_SECONDS
     job = V1Job(
         api_version="batch/v1",
         kind="Job",
@@ -194,20 +176,64 @@ async def trigger_backup(namespace: str, backup_name: str) -> dict[str, Any]:
             labels=job_labels,
             annotations={"cronjob.kubernetes.io/instantiate": "manual"},
         ),
-        spec=template.spec,
+        spec=job_spec,
     )
 
     try:
         created = batch_api.create_namespaced_job(namespace=namespace, body=job)
     except ApiException as e:
         raise HTTPException(status_code=500, detail=f"Failed to create backup job: {e}")
-    created_name = (
-        created.metadata.name if created.metadata and created.metadata.name else manual_job_name
-    )
+    return created.metadata.name if created.metadata and created.metadata.name else manual_job_name
+
+
+@app.post("/api/cronjobs/{namespace}/{cronjob_name}/trigger")
+async def trigger_backup(namespace: str, cronjob_name: str) -> dict[str, Any]:
+    """Manually trigger a backup by instantiating a Job from its CronJob."""
+    created_name = _trigger_backup_job(namespace, cronjob_name)
     return {
         "status": "triggered",
         "message": f"Manual backup job '{created_name}' created successfully",
         "job_name": created_name,
+    }
+
+
+@app.post("/api/schedules/{namespace}/{schedule_name}/trigger")
+async def trigger_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
+    """Trigger a manual backup for every PVC under a BackupSchedule."""
+    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
+        )
+    schedule = BackupSchedule.from_crd(item)
+    if not schedule.status.backups:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
+        )
+
+    triggered: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for entry in schedule.status.backups:
+        try:
+            job_name = _trigger_backup_job(namespace, entry.cronjob_name)
+            triggered.append({"pvc": entry.pvc_name, "job_name": job_name})
+        except HTTPException as e:
+            errors.append({"pvc": entry.pvc_name, "error": str(e.detail)})
+
+    if not triggered:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trigger any backups: {errors}",
+        )
+
+    return {
+        "status": "triggered",
+        "message": f"Triggered {len(triggered)}/{len(schedule.status.backups)} backups "
+        f"for '{schedule_name}'",
+        "triggered": triggered,
+        "errors": errors,
     }
 
 
@@ -221,19 +247,17 @@ async def list_restores() -> list[dict[str, Any]]:
 async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
     """Create a Restore custom resource to initiate a restore operation."""
     custom_api = get_custom_objects_api()
-    target_ns = req.target_pvc_namespace or req.backup_namespace or "default"
-    target_pvc = req.target_pvc
+    target_pvc = req.target_pvc or req.pvc_name
 
-    restore_name = f"restore-{target_pvc}"[:45] + f"-{int(time.time())}"
+    restore_name = f"restore-{req.pvc_name}"[:45] + f"-{int(time.time())}"
     restore = Restore(
         name=restore_name,
-        namespace=target_ns,
-        labels=make_restore_labels(restore_name, req.backup_ref, target_pvc),
+        namespace=req.namespace,
+        labels=make_restore_labels(restore_name, req.schedule_name, req.pvc_name),
         spec=RestoreSpec(
-            backup_ref=req.backup_ref,
+            schedule_name=req.schedule_name,
+            pvc_name=req.pvc_name,
             target_pvc=target_pvc,
-            target_pvc_namespace=target_ns,
-            source_pvc_namespace=req.backup_namespace,
             snapshot_id=req.snapshot_id or "latest",
         ),
     )
@@ -242,7 +266,7 @@ async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
         custom_api.create_namespaced_custom_object(
             group=CRD_GROUP,
             version=CRD_VERSION,
-            namespace=target_ns,
+            namespace=req.namespace,
             plural=CRD_PLURAL_RESTORES,
             body=restore.to_crd_body(CRD_GROUP, CRD_VERSION),
         )
@@ -250,9 +274,9 @@ async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to create Restore resource: {e}")
     return {
         "status": "created",
-        "message": f"Restore '{restore_name}' initiated in namespace '{target_ns}'",
+        "message": f"Restore '{restore_name}' initiated in namespace '{req.namespace}'",
         "name": restore_name,
-        "namespace": target_ns,
+        "namespace": req.namespace,
     }
 
 
