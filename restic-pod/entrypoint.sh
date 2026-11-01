@@ -18,6 +18,9 @@ set -o pipefail
 TLS_FLAG=""
 [ "${SECCHIO_INSECURE_TLS:-false}" = "true" ] && TLS_FLAG="--insecure-tls"
 
+# unlock the repo just in case. if it fails this wont raise an error
+restic $TLS_FLAG unlock || true
+
 if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   timeout 10s restic $TLS_FLAG snapshots --json >/dev/null 2>&1 || restic $TLS_FLAG init
 
