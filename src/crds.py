@@ -71,17 +71,8 @@ def aliased(wire_name: str, **field_kwargs: Any) -> Any:
     return Field(validation_alias=wire_name, serialization_alias=wire_name, **field_kwargs)
 
 
-class BackupPhase(StrEnum):
-    """Lifecycle phase of a single PVC Backup."""
-
-    PENDING = "Pending"
-    RUNNING = "Running"
-    COMPLETED = "Completed"
-    FAILED = "Failed"
-
-
-class RestorePhase(StrEnum):
-    """Lifecycle phase of a Restore operation."""
+class Phase(StrEnum):
+    """Lifecycle phase of a backup entry or a restore."""
 
     PENDING = "Pending"
     RUNNING = "Running"
@@ -136,12 +127,13 @@ class S3BackendConfig(Model):
         return f"s3:{self.endpoint}"
 
 
-# --- BackupSchedule (cluster-scoped) --------------------------------------
+# --- BackupSchedule (namespaced) ------------------------------------------
 
 
 class BackupScheduleSpec(Model):
     pvc: PVCSelector = Field(default_factory=PVCSelector)
     schedule: str = ""
+    time_zone: str = ""
     repo: S3BackendConfig = Field(default_factory=S3BackendConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
 
@@ -155,26 +147,6 @@ class BackupScheduleSummary(Model):
     running_backups: int = 0
 
 
-class BackupScheduleStatus(Model):
-    phase: SchedulePhase | str = SchedulePhase.PENDING
-    all_ok: bool = False
-    last_backup_time: str = ""
-    message: str = ""
-    summary: BackupScheduleSummary = Field(default_factory=BackupScheduleSummary)
-
-
-# --- Backup (namespaced, one per PVC) -------------------------------------
-
-
-class BackupSpec(Model):
-    pvc_name: str = ""
-    pvc_namespace: str = ""
-    repo: S3BackendConfig = Field(default_factory=S3BackendConfig)
-    retention: RetentionConfig = Field(default_factory=RetentionConfig)
-    schedule: str = ""
-    secret_name: str = ""
-
-
 class SnapshotInfo(Model):
     """A restic snapshot as surfaced in status and the UI."""
 
@@ -183,33 +155,44 @@ class SnapshotInfo(Model):
     size: int = 0
 
 
-class BackupStatus(Model):
-    phase: BackupPhase | str = BackupPhase.PENDING
+class BackupEntry(Model):
+    """Per-PVC backup status stored on the BackupSchedule."""
+
+    pvc_name: str = ""
+    cronjob_name: str = ""
+    phase: Phase | str = Phase.PENDING
     last_backup_time: str = ""
     snapshots: list[SnapshotInfo] = Field(default_factory=list)
     message: str = ""
     reason: str = ""
 
 
-class Backup(CRModel):
-    spec: BackupSpec = Field(default_factory=BackupSpec)
-    status: BackupStatus = Field(default_factory=BackupStatus)
+class BackupScheduleStatus(Model):
+    phase: SchedulePhase | str = SchedulePhase.PENDING
+    all_ok: bool = False
+    last_backup_time: str = ""
+    message: str = ""
+    summary: BackupScheduleSummary = Field(default_factory=BackupScheduleSummary)
+    backups: list[BackupEntry] = Field(default_factory=list)
+
+
+class BackupSchedule(CRModel):
+    spec: BackupScheduleSpec = Field(default_factory=BackupScheduleSpec)
+    status: BackupScheduleStatus = Field(default_factory=BackupScheduleStatus)
 
 
 # --- Restore (namespaced) -------------------------------------------------
 
 
 class RestoreSpec(Model):
+    schedule_name: str = ""
+    pvc_name: str = ""
     target_pvc: str = aliased("targetPVC", default="")
-    target_pvc_namespace: str = aliased("targetPVCNamespace", default="")
-    backup_ref: str = ""
-    source_pvc: str = aliased("sourcePVC", default="")
-    source_pvc_namespace: str = aliased("sourcePVCNamespace", default="")
     snapshot_id: str = aliased("snapshotID", default="latest")
 
 
 class RestoreStatus(Model):
-    phase: RestorePhase | str = RestorePhase.PENDING
+    phase: Phase | str = Phase.PENDING
     start_time: str = ""
     completion_time: str = ""
     snapshot_id: str = aliased("snapshotID", default="")

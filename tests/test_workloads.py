@@ -4,28 +4,53 @@ from __future__ import annotations
 
 from kubernetes.client import V1Container, V1PodSpec
 
-from backup import JobConfig, create_cronjob
+from common import JOB_TTL_SECONDS, LABEL_SCHEDULE
 from crds import RetentionConfig, S3BackendConfig
-from restore import RestoreJobConfig, create_restore_job
+from workloads import WorkloadConfig, create_cronjob, create_restore_job
 
 REPO = S3BackendConfig(endpoint="minio/bucket", secret_name="creds")
 IMAGE = "restic/restic:latest"
 
 
-def _backup_pod() -> V1PodSpec:
-    cronjob = create_cronjob(
-        JobConfig(
-            name="bk-cronjob",
-            namespace="ns",
-            pvc_name="data",
-            pvc_namespace="ns",
-            repo=REPO,
-            retention=RetentionConfig(keep_daily=1),
-            image=IMAGE,
-            secret_name="creds",
-        ),
+def _backup_config() -> WorkloadConfig:
+    return WorkloadConfig(
+        name="sched-backup-data-cronjob",
+        namespace="ns",
+        pvc_name="data",
+        repo=REPO,
+        secret_name="creds",
+        image=IMAGE,
+        mode="backup",
         schedule="* * * * *",
+        time_zone="Europe/Brussels",
+        retention=RetentionConfig(keep_daily=1),
+        schedule_name="sched",
+        owner_kind="BackupSchedule",
+        owner_name="sched",
+        owner_uid="uid",
     )
+
+
+def _restore_config() -> WorkloadConfig:
+    return WorkloadConfig(
+        name="rt-job",
+        namespace="ns",
+        pvc_name="source",
+        repo=REPO,
+        secret_name="creds",
+        image=IMAGE,
+        mode="restore",
+        snapshot_id="abc123",
+        target_pvc="target",
+        schedule_name="sched",
+        owner_kind="Restore",
+        owner_name="rt",
+        owner_uid="uid",
+    )
+
+
+def _backup_pod() -> V1PodSpec:
+    cronjob = create_cronjob(_backup_config())
     spec = cronjob.spec
     assert spec is not None and spec.job_template is not None
     job_template = spec.job_template.spec
@@ -36,18 +61,7 @@ def _backup_pod() -> V1PodSpec:
 
 
 def _restore_pod() -> V1PodSpec:
-    job = create_restore_job(
-        RestoreJobConfig(
-            name="rt-job",
-            namespace="ns",
-            target_pvc="data",
-            source_pvc="data",
-            source_pvc_namespace="ns",
-            repo=REPO,
-            secret_name="creds",
-            image=IMAGE,
-        )
-    )
+    job = create_restore_job(_restore_config())
     spec = job.spec
     assert spec is not None and spec.template is not None
     pod = spec.template.spec
@@ -109,38 +123,25 @@ def test_restore_pod_is_hardened() -> None:
 
 
 def test_backup_cronjob_spec_and_env() -> None:
-    cronjob = create_cronjob(
-        JobConfig(
-            name="bk-cronjob",
-            namespace="ns",
-            pvc_name="data",
-            pvc_namespace="ns",
-            repo=REPO,
-            retention=RetentionConfig(keep_daily=1),
-            image=IMAGE,
-            secret_name="creds",
-            schedule_name="sched",
-            backup_name="bk",
-            backup_uid="uid",
-        ),
-        schedule="0 2 * * *",
-    )
+    cronjob = create_cronjob(_backup_config())
 
     assert cronjob.metadata is not None
-    assert cronjob.metadata.name == "bk-cronjob"
+    assert cronjob.metadata.name == "sched-backup-data-cronjob"
     assert cronjob.metadata.namespace == "ns"
     assert cronjob.metadata.owner_references is not None
-    assert cronjob.metadata.owner_references[0].kind == "Backup"
+    assert cronjob.metadata.owner_references[0].kind == "BackupSchedule"
 
     spec = cronjob.spec
     assert spec is not None
-    assert spec.schedule == "0 2 * * *"
+    assert spec.schedule == "* * * * *"
+    assert spec.time_zone == "Europe/Brussels"
     assert spec.concurrency_policy == "Forbid"
     assert spec.successful_jobs_history_limit == 1
     assert spec.failed_jobs_history_limit == 2
 
     job_template = spec.job_template
     assert job_template is not None and job_template.spec is not None
+    assert job_template.spec.ttl_seconds_after_finished == JOB_TTL_SECONDS
     pod = job_template.spec.template.spec
     assert pod is not None
     container = _container(pod)
@@ -148,24 +149,23 @@ def test_backup_cronjob_spec_and_env() -> None:
     assert _env_value(container, "SECCHIO_MODE") == "backup"
     assert _env_value(container, "SECCHIO_RETENTION") == "--keep-daily 1"
 
+    # Canonical quantities: the API server stores 1000m as 1.
+    assert container.resources is not None
+    assert container.resources.limits == {"cpu": "1", "memory": "512Mi"}
+
+
+def test_backup_cronjob_does_not_guess_schedule_label() -> None:
+    config = _backup_config()
+    config.schedule_name = ""
+    cronjob = create_cronjob(config)
+
+    assert cronjob.metadata is not None
+    assert cronjob.metadata.labels is not None
+    assert cronjob.metadata.labels[LABEL_SCHEDULE] == ""
+
 
 def test_restore_job_spec_and_env() -> None:
-    job = create_restore_job(
-        RestoreJobConfig(
-            name="rt-job",
-            namespace="ns",
-            target_pvc="target",
-            source_pvc="source",
-            source_pvc_namespace="src-ns",
-            repo=REPO,
-            secret_name="creds",
-            image=IMAGE,
-            snapshot_id="abc123",
-            restore_name="rt",
-            restore_uid="uid",
-            backup_name="bk",
-        )
-    )
+    job = create_restore_job(_restore_config())
 
     assert job.metadata is not None
     assert job.metadata.name == "rt-job"
@@ -175,10 +175,11 @@ def test_restore_job_spec_and_env() -> None:
     spec = job.spec
     assert spec is not None
     assert spec.backoff_limit == 1
+    assert spec.ttl_seconds_after_finished == JOB_TTL_SECONDS
 
     pod = spec.template.spec
     assert pod is not None
     container = _container(pod)
-    assert _env_value(container, "RESTIC_REPOSITORY") == "s3:minio/bucket/src-ns/source"
+    assert _env_value(container, "RESTIC_REPOSITORY") == "s3:minio/bucket/ns/source"
     assert _env_value(container, "SECCHIO_MODE") == "restore"
     assert _env_value(container, "SECCHIO_SNAPSHOT") == "abc123"

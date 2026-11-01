@@ -1,11 +1,11 @@
 # base image for all stages
-FROM python:3.15.1-alpine@sha256:54448f67d7c31c39e5cdd3ea2d6382395ce142806c284425f8e897d78a0465b3 AS base
+FROM python:3.15.2-alpine@sha256:20a82dbc2783112ddb91d1534603f802d222a3e63e593cd002eb2ac534e70211 AS base
 
 
 # intermediary step with UV
 FROM base AS uv
 # copy uv bins
-COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 /uv /bin/
 
 
 # build stage
@@ -38,8 +38,11 @@ FROM base
 # unpriv user
 RUN adduser app -SD -h /app -u 1000
 
-# Copy the application from the builder
+# Copy the venv from the builder
 COPY --from=builder --chown=1000:1000 /app /app
+
+# precompile the project's venv and the stdlib to .pyc (this results in a 20MB gain in compressed size, but a 4x speedup on startup)
+RUN python -c "import compileall, sysconfig; compileall.compile_dir(sysconfig.get_paths()['stdlib']); compileall.compile_dir('/app/.venv/lib/python3.15/');"
 
 # install code
 WORKDIR /app

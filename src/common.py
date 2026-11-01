@@ -13,7 +13,6 @@ OPERATOR_VERSION = os.environ.get("OPERATOR_VERSION", "dev")
 CRD_GROUP = "secchio.cocointhe.cloud"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL_BACKUPSCHEDULES = "backupschedules"
-CRD_PLURAL_BACKUPS = "backups"
 CRD_PLURAL_RESTORES = "restores"
 
 # Domain Label Keys
@@ -22,23 +21,22 @@ LABEL_APP_VALUE = "secchio"
 LABEL_MANAGED_BY = "app.kubernetes.io/managed-by"
 LABEL_MANAGED_BY_VALUE = "secchio-operator"
 LABEL_SCHEDULE = "secchio.cocointhe.cloud/schedule"
-LABEL_BACKUP = "secchio.cocointhe.cloud/backup"
 LABEL_RESTORE = "secchio.cocointhe.cloud/restore"
 LABEL_PVC_NAME = "secchio.cocointhe.cloud/pvc-name"
 
 # Status reasons
-REASON_SECRET_MISSING = "SecretNotFound"
+REASON_CRONJOB_REJECTED = "CronJobRejected"
+
+# How long a finished backup/restore Job (and its pod) is kept before Kubernetes
+# garbage-collects it. Long enough for the operator to read the pod termination log
+# and update the CR status.
+JOB_TTL_SECONDS = 900  # 15m
 
 
 # Naming helpers
-def make_backup_name(schedule_name: str, pvc_name: str) -> str:
-    """Generate a standard Backup custom resource name."""
-    return f"{schedule_name}-backup-{pvc_name}"
-
-
-def make_cronjob_name(backup_name: str) -> str:
-    """Generate a standard CronJob name for a Backup resource."""
-    return f"{backup_name}-cronjob"
+def make_cronjob_name(schedule_name: str, pvc_name: str) -> str:
+    """Generate the CronJob name for a schedule/PVC pair."""
+    return f"{schedule_name}-backup-{pvc_name}-cronjob"
 
 
 def make_restore_job_name(restore_name: str) -> str:
@@ -56,32 +54,22 @@ def _base_labels() -> dict[str, str]:
     }
 
 
-def make_backup_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
-    """Generate standard labels for a Backup custom resource."""
-    return {
-        **_base_labels(),
-        LABEL_SCHEDULE: schedule_name,
-        LABEL_PVC_NAME: pvc_name,
-    }
-
-
-def make_cronjob_labels(schedule_name: str, backup_name: str, pvc_name: str) -> dict[str, str]:
+def make_cronjob_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
     """Generate standard labels for a backup CronJob."""
     return {
         **_base_labels(),
         LABEL_SCHEDULE: schedule_name,
-        LABEL_BACKUP: backup_name,
         LABEL_PVC_NAME: pvc_name,
     }
 
 
-def make_restore_labels(restore_name: str, backup_name: str, target_pvc: str) -> dict[str, str]:
+def make_restore_labels(restore_name: str, schedule_name: str, pvc_name: str) -> dict[str, str]:
     """Generate standard labels for a restore Job."""
     return {
         **_base_labels(),
         LABEL_RESTORE: restore_name,
-        LABEL_BACKUP: backup_name,
-        LABEL_PVC_NAME: target_pvc,
+        LABEL_SCHEDULE: schedule_name,
+        LABEL_PVC_NAME: pvc_name,
     }
 
 
@@ -94,11 +82,6 @@ def extract_pvc_name(labels: dict[str, str]) -> str:
 def extract_schedule_name(labels: dict[str, str]) -> str:
     """Extract schedule name from standard labels."""
     return labels.get(LABEL_SCHEDULE, "")
-
-
-def extract_backup_name(labels: dict[str, str]) -> str:
-    """Extract backup name from standard labels."""
-    return labels.get(LABEL_BACKUP, "")
 
 
 def extract_restore_name(labels: dict[str, str]) -> str:

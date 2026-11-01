@@ -32,80 +32,42 @@ def start_up(settings: kopf.OperatorSettings, **kwargs: Any) -> None:
 # BackupSchedule
 @kopf.on.create(CRD_GROUP, CRD_VERSION, "backupschedule")
 @kopf.on.update(CRD_GROUP, CRD_VERSION, "backupschedule")
-def on_schedule(*, name: str, spec: kopf.Spec, **kwargs: Any) -> None:
-    reconcile.schedule(name=name, spec=dict(spec))
-
-
-@kopf.on.delete(CRD_GROUP, CRD_VERSION, "backupschedule")
-def on_schedule_delete(*, name: str, **kwargs: Any) -> None:
-    reconcile.delete_schedule(name=name)
-
-
-@kopf.timer(CRD_GROUP, CRD_VERSION, "backupschedule", interval=60)
-def check_schedules(*, name: str, spec: kopf.Spec, **kwargs: Any) -> None:
-    """Periodically re-reconcile so newly created PVCs are picked up."""
-    reconcile.schedule(name=name, spec=dict(spec))
-
-
-# Backup
-@kopf.on.create(CRD_GROUP, CRD_VERSION, "backup")
-@kopf.on.update(CRD_GROUP, CRD_VERSION, "backup")
-def on_backup(
+def on_schedule(
     *,
     name: str,
+    namespace: str | None = None,
     spec: kopf.Spec,
     meta: kopf.Meta,
-    status: kopf.Status | None = None,
-    namespace: str | None = None,
     **kwargs: Any,
 ) -> None:
-    reconcile.backup(
+    reconcile.schedule(
         name=name,
         namespace=namespace or "",
         spec=dict(spec),
-        meta=dict(meta),
-        current_status=dict(status or {}),
+        uid=meta.get("uid", ""),
     )
 
 
-@kopf.on.delete(CRD_GROUP, CRD_VERSION, "backup")
-def on_backup_delete(
+@kopf.timer(CRD_GROUP, CRD_VERSION, "backupschedule", interval=60)
+def check_schedules(
     *,
     name: str,
-    meta: kopf.Meta,
     namespace: str | None = None,
-    **kwargs: Any,
-) -> None:
-    reconcile.delete_backup(name=name, namespace=namespace or "", meta=dict(meta))
-
-
-@kopf.timer(CRD_GROUP, CRD_VERSION, "backup", interval=60)
-def check_backups(
-    *,
-    name: str,
     spec: kopf.Spec,
     meta: kopf.Meta,
-    status: kopf.Status | None = None,
-    namespace: str | None = None,
     **kwargs: Any,
 ) -> None:
-    """Periodically ensure the CronJob exists and sync status from the latest Job."""
-    ns = namespace or ""
-    ensured = reconcile.backup(
+    """Periodically re-reconcile so newly created PVCs are picked up."""
+    reconcile.schedule(
         name=name,
-        namespace=ns,
+        namespace=namespace or "",
         spec=dict(spec),
-        meta=dict(meta),
-        current_status=dict(status or {}),
+        uid=meta.get("uid", ""),
     )
-    # Don't let a stale job status clobber a missing-Secret failure.
-    if ensured:
-        status_mod.backup_status(name=name, namespace=ns)
 
 
-# Restore
+# Restore (one-shot: a Restore is immutable once its Job is created)
 @kopf.on.create(CRD_GROUP, CRD_VERSION, "restore")
-@kopf.on.update(CRD_GROUP, CRD_VERSION, "restore")
 def on_restore(
     *,
     name: str,
@@ -126,4 +88,4 @@ def on_restore_delete(*, name: str, namespace: str | None = None, **kwargs: Any)
 @kopf.on.event("batch", "v1", "jobs", labels={"app": "secchio"})
 def on_job(*, body: kopf.Body, **kwargs: Any) -> None:
     """Sync Backup/Restore status whenever a restic Job changes."""
-    status_mod.job_status(status_mod.JobStatus.from_kopf_body(body))
+    status_mod.job_event(status_mod.JobStatus.from_kopf_body(body))

@@ -573,6 +573,23 @@
         </div>
     </div>
 
+    <!-- Confirm Schedule Backup Modal -->
+    <div class="modal-overlay" id="confirm-schedule-backup-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Trigger All Backups</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeScheduleBackupConfirmModal()">✕</button>
+            </div>
+            <div class="confirm-body">
+                <p>Trigger a backup for all <strong id="confirm-schedule-backup-count"></strong> PVCs under schedule <strong id="confirm-schedule-backup-name"></strong>?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeScheduleBackupConfirmModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-schedule-backup" onclick="confirmTriggerScheduleBackup()">Yes, Trigger All</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirm Backup Modal -->
     <div class="modal-overlay" id="confirm-backup-modal">
         <div class="modal">
@@ -717,19 +734,17 @@
                 if (retention.keepMonthly !== undefined && retention.keepMonthly !== null && retention.keepMonthly !== '') retentionParts.push({ label: 'Monthly', value: retention.keepMonthly });
 
                 const backupsHtml = (s.backups && s.backups.length > 0)
-                    ? s.backups.map(b => renderBackupItem(b)).join('')
-                    : (s.matched_pvcs && s.matched_pvcs.length > 0)
-                        ? s.matched_pvcs.map(p => `
-                            <div class="backup-item">
-                                <div class="backup-pvc">${escapeHtml(p.namespace)} / ${escapeHtml(p.name)}</div>
-                                <div class="backup-meta">PVC matched, waiting for backup initialization...</div>
-                            </div>
-                        `).join('')
-                        : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
-                const backupCount = (s.backups && s.backups.length) || (s.matched_pvcs && s.matched_pvcs.length) || 0;
-                const expanded = expandedSchedules.has(s.name);
+                    ? s.backups.map(b => renderBackupItem(b, s)).join('')
+                    : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
+                const backupCount = (s.backups && s.backups.length) || 0;
+                const scheduleKey = `${s.namespace}/${s.name}`;
+                const expanded = expandedSchedules.has(scheduleKey);
 
-                const scheduleHtml = chips([chip(s.schedule || '-')]);
+                const timeZone = s.time_zone || 'UTC (default)';
+                const scheduleHtml = chips([
+                    chip(s.schedule || '-'),
+                    chip(timeZone, { label: 'TZ' }),
+                ]);
                 const repoHtml = chips([chip(s.repo?.endpoint || '-')]);
                 const retentionHtml = retentionParts.length
                     ? chips(retentionParts.map(r => chip(r.value, { label: r.label })))
@@ -740,10 +755,11 @@
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">
-                            <span>${escapeHtml(s.name)}</span>
+                            <span>${escapeHtml(s.namespace)} / ${escapeHtml(s.name)}</span>
                             ${phaseBadge(s.status?.phase)}
                             <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${allOk}</span>
                         </div>
+                        <button class="btn btn-secondary btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openScheduleBackupConfirmModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">▶ Trigger All</button>
                     </div>
                     <div class="card-body">
                         <div class="meta-grid">
@@ -753,7 +769,7 @@
                             <div class="meta-item"><strong>Summary:</strong>${summaryHtml}</div>
                         </div>
 
-                        <button class="collapse-toggle" data-schedule="${escapeHtml(s.name)}" onclick="toggleScheduleBackups(this)">
+                        <button class="collapse-toggle" data-schedule="${escapeHtml(scheduleKey)}" onclick="toggleScheduleBackups(this)">
                             <span class="chevron">${expanded ? '▾' : '▸'}</span>
                             Target PVC Backups (${backupCount})
                         </button>
@@ -766,7 +782,7 @@
             }).join('');
         }
 
-        function renderBackupItem(b) {
+        function renderBackupItem(b, schedule) {
             const phase = b.phase || 'Pending';
             const lastBackup = formatDateTime(b.last_backup_time) || 'Never';
             const snapshots = [...(b.snapshots || [])].sort((x, y) => (y.time || '').localeCompare(x.time || ''));
@@ -775,22 +791,22 @@
             <div class="backup-item">
                 <div class="backup-header">
                     <div class="backup-pvc-row">
-                        <span class="backup-pvc">${escapeHtml(b.pvc_namespace)} / ${escapeHtml(b.pvc_name)}</span>
+                        <span class="backup-pvc">${escapeHtml(schedule.namespace)} / ${escapeHtml(b.pvc_name)}</span>
                         ${phaseBadge(phase)}
                     </div>
-                    <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(b.pvc_namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.namespace)}, ${jsArg(b.name)})">▶ Trigger Backup</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(schedule.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.cronjob_name)})">▶ Trigger Backup</button>
                 </div>
                 <div class="backup-meta-row">
-                    <div class="meta-item"><strong>Backup CR:</strong> <code>${escapeHtml(b.name)}</code></div>
+                    <div class="meta-item"><strong>CronJob:</strong> <code>${escapeHtml(b.cronjob_name)}</code></div>
                     <div class="meta-item"><strong>Last Run:</strong> ${escapeHtml(lastBackup)}</div>
                 </div>
-                ${renderSnapshotTable(b, snapshots)}
+                ${renderSnapshotTable(b, schedule, snapshots)}
                 ${phase === 'Failed' && b.message ? `<div class="alert-box"><strong>Failure Reason:</strong> ${escapeHtml(b.message)}</div>` : ''}
             </div>
             `;
         }
 
-        function renderSnapshotTable(b, snapshots) {
+        function renderSnapshotTable(b, schedule, snapshots) {
             if (!snapshots.length) {
                 return '<div class="snap-empty">No snapshots recorded yet.</div>';
             }
@@ -799,7 +815,7 @@
                     <td class="snap-id"><code>${escapeHtml(s.id)}</code></td>
                     <td class="snap-time">${escapeHtml(formatDateTime(s.time))}</td>
                     <td class="snap-size">${escapeHtml(formatBytes(s.size))}</td>
-                    <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModal(${jsArg(b.name)}, ${jsArg(b.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)}, ${jsArg(s.time)})">↺ Restore</button></td>
+                    <td class="snap-actions"><button class="btn btn-secondary btn-sm" onclick="openRestoreModal(${jsArg(schedule.namespace)}, ${jsArg(schedule.name)}, ${jsArg(b.pvc_name)}, ${jsArg(s.id)}, ${jsArg(s.time)})">↺ Restore</button></td>
                 </tr>`).join('');
             return `
                 <table class="snap-table">
@@ -821,7 +837,7 @@
                     <tr>
                         <th>Restore Name</th>
                         <th>Target PVC</th>
-                        <th>Source Backup Ref</th>
+                        <th>Source</th>
                         <th>Snapshot</th>
                         <th>Status</th>
                         <th>Time</th>
@@ -839,8 +855,8 @@
                         return `
                         <tr>
                             <td><strong>${escapeHtml(r.name)}</strong><br><small style="color: var(--text-muted);">${escapeHtml(r.namespace)}</small></td>
-                            <td><code>${escapeHtml(r.target_pvc_namespace)} / ${escapeHtml(r.target_pvc)}</code></td>
-                            <td><code>${escapeHtml(r.backup_ref)}</code></td>
+                            <td><code>${escapeHtml(r.namespace)} / ${escapeHtml(r.target_pvc)}</code></td>
+                            <td><code>${escapeHtml(r.schedule_name)} / ${escapeHtml(r.pvc_name)}</code></td>
                             <td><code>${escapeHtml(r.restored_snapshot_id || r.snapshot_id || 'latest')}</code></td>
                             <td>${phaseBadge(phase)}</td>
                             <td><small>${escapeHtml(timeStr)}</small></td>
@@ -854,10 +870,10 @@
             `;
         }
 
-        async function triggerBackup(namespace, backupName) {
+        async function triggerBackup(namespace, cronjobName) {
             try {
-                showToast(`Triggering manual backup for ${backupName}...`, 'info');
-                const res = await fetch(`/api/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(backupName)}/trigger`, {
+                showToast(`Triggering manual backup for ${cronjobName}...`, 'info');
+                const res = await fetch(`/api/cronjobs/${encodeURIComponent(namespace)}/${encodeURIComponent(cronjobName)}/trigger`, {
                     method: 'POST'
                 });
                 const data = await res.json();
@@ -870,11 +886,57 @@
             }
         }
 
-        function openBackupConfirmModal(pvcNamespace, pvcName, namespace, backupName) {
-            document.getElementById('confirm-backup-target').textContent = `${pvcNamespace} / ${pvcName}`;
-            document.getElementById('confirm-backup-modal').dataset.backupNamespace = namespace;
-            document.getElementById('confirm-backup-modal').dataset.backupName = backupName;
-            document.getElementById('confirm-backup-modal').style.display = 'flex';
+        function openScheduleBackupConfirmModal(namespace, scheduleName, count) {
+            const modal = document.getElementById('confirm-schedule-backup-modal');
+            document.getElementById('confirm-schedule-backup-name').textContent = `${namespace} / ${scheduleName}`;
+            document.getElementById('confirm-schedule-backup-count').textContent = count;
+            modal.dataset.scheduleNamespace = namespace;
+            modal.dataset.scheduleName = scheduleName;
+            modal.style.display = 'flex';
+        }
+
+        function closeScheduleBackupConfirmModal() {
+            document.getElementById('confirm-schedule-backup-modal').style.display = 'none';
+        }
+
+        async function triggerScheduleBackup(namespace, scheduleName) {
+            try {
+                showToast(`Triggering backups for schedule ${namespace}/${scheduleName}...`, 'info');
+                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/trigger`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to trigger backups');
+
+                if (data.errors && data.errors.length > 0) {
+                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
+                } else {
+                    showToast(data.message, 'success');
+                }
+                setTimeout(loadAllData, 2000);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function confirmTriggerScheduleBackup() {
+            const modal = document.getElementById('confirm-schedule-backup-modal');
+            const btn = document.getElementById('btn-confirm-schedule-backup');
+            btn.disabled = true;
+            try {
+                await triggerScheduleBackup(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
+                closeScheduleBackupConfirmModal();
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function openBackupConfirmModal(namespace, pvcName, cronjobName) {
+            document.getElementById('confirm-backup-target').textContent = `${namespace} / ${pvcName}`;
+            const modal = document.getElementById('confirm-backup-modal');
+            modal.dataset.backupNamespace = namespace;
+            modal.dataset.cronjobName = cronjobName;
+            modal.style.display = 'flex';
         }
 
         function closeBackupConfirmModal() {
@@ -917,20 +979,19 @@
 
         async function confirmTriggerBackup() {
             const modal = document.getElementById('confirm-backup-modal');
-            await triggerBackup(modal.dataset.backupNamespace, modal.dataset.backupName);
+            await triggerBackup(modal.dataset.backupNamespace, modal.dataset.cronjobName);
             closeBackupConfirmModal();
         }
 
-        function openRestoreModal(backupRef, backupNs, pvcName, snapId, snapTime) {
+        function openRestoreModal(namespace, scheduleName, pvcName, snapId, snapTime) {
             const modal = document.getElementById('restore-modal');
-            modal.dataset.backupRef = backupRef;
-            modal.dataset.backupNs = backupNs;
-            modal.dataset.targetPvc = pvcName;
-            modal.dataset.targetNs = backupNs;
+            modal.dataset.namespace = namespace;
+            modal.dataset.scheduleName = scheduleName;
+            modal.dataset.pvcName = pvcName;
             modal.dataset.snapshotId = snapId;
             document.getElementById('modal-snapshot-id').textContent = snapId || 'latest';
             document.getElementById('modal-snapshot-time').textContent = formatDateTime(snapTime) || '—';
-            document.getElementById('modal-target-ns').textContent = backupNs;
+            document.getElementById('modal-target-ns').textContent = namespace;
             document.getElementById('modal-target-pvc').textContent = pvcName;
             modal.style.display = 'flex';
         }
@@ -947,10 +1008,10 @@
 
             const modal = document.getElementById('restore-modal');
             const payload = {
-                backup_ref: modal.dataset.backupRef,
-                backup_namespace: modal.dataset.backupNs,
-                target_pvc: modal.dataset.targetPvc,
-                target_pvc_namespace: modal.dataset.targetNs,
+                namespace: modal.dataset.namespace,
+                schedule_name: modal.dataset.scheduleName,
+                pvc_name: modal.dataset.pvcName,
+                target_pvc: modal.dataset.pvcName,
                 snapshot_id: modal.dataset.snapshotId,
             };
 

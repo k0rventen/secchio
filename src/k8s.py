@@ -13,16 +13,10 @@ from typing import Any
 
 from kubernetes import client
 from kubernetes.client import BatchV1Api, CustomObjectsApi, V1CronJob, V1Job, V1OwnerReference
-from kubernetes.client.exceptions import ApiException, OpenApiException
+from kubernetes.client.exceptions import ApiException
 
-from common import (
-    CRD_GROUP,
-    CRD_PLURAL_BACKUPS,
-    CRD_PLURAL_BACKUPSCHEDULES,
-    CRD_VERSION,
-    LABEL_SCHEDULE,
-)
-from crds import BackupScheduleStatus, BackupStatus, RestoreStatus
+from common import CRD_GROUP, CRD_PLURAL_BACKUPSCHEDULES, CRD_VERSION, LABEL_SCHEDULE
+from crds import BackupScheduleStatus, RestoreStatus
 
 logger = logging.getLogger("k8s")
 
@@ -46,69 +40,36 @@ def get_batch_api() -> BatchV1Api:
     return BatchV1Api()
 
 
-# Generic listing
-def list_cluster_custom(
-    api: CustomObjectsApi,
-    plural: str,
-    label_selector: str = "",
-) -> list[dict[str, Any]]:
-    """List a cluster-scoped custom resource, returning ``[]`` on failure."""
-    params: dict[str, Any] = {"group": CRD_GROUP, "version": CRD_VERSION, "plural": plural}
-    if label_selector:
-        params["label_selector"] = label_selector
-    try:
-        result: Any = api.list_cluster_custom_object(**params)
-    except ApiException:
-        logger.exception("Failed to list %s", plural)
-        return []
-    items = result.get("items", []) if isinstance(result, dict) else []
-    return [item for item in items if isinstance(item, dict)]
-
-
 # Status
 def patch_status(
     custom_api: CustomObjectsApi,
     *,
     plural: str,
     name: str,
-    status: BackupStatus | RestoreStatus | BackupScheduleStatus,
-    namespace: str | None = None,
+    namespace: str,
+    status: BackupScheduleStatus | RestoreStatus,
 ) -> None:
-    """Write a CR status, using the status subresource when it is available.
+    """Write a namespaced CR status, using the status subresource when available.
 
     Falls back to patching the main object if the API answers 404, which is what
     happens when a CRD was applied without ``subresources.status``.
     """
-    body = {"status": status.model_dump(by_alias=True, mode="json")}
-    cluster = namespace is None
     params: dict[str, Any] = {
         "group": CRD_GROUP,
         "version": CRD_VERSION,
         "plural": plural,
         "name": name,
-        "body": body,
+        "namespace": namespace,
+        "body": {"status": status.model_dump(by_alias=True, mode="json")},
     }
-    if namespace is not None:
-        params["namespace"] = namespace
-
-    def write(subresource: bool) -> None:
-        if cluster and subresource:
-            custom_api.patch_cluster_custom_object_status(**params)
-        elif cluster:
-            custom_api.patch_cluster_custom_object(**params)
-        elif subresource:
-            custom_api.patch_namespaced_custom_object_status(**params)
-        else:
-            custom_api.patch_namespaced_custom_object(**params)
-
     try:
-        write(subresource=True)
+        custom_api.patch_namespaced_custom_object_status(**params)
     except ApiException as e:
         if e.status != 404:
             logger.exception("Failed to update status for %s %s", plural, name)
             return
         try:
-            write(subresource=False)
+            custom_api.patch_namespaced_custom_object(**params)
         except ApiException:
             logger.exception("Failed to fallback-patch status for %s %s", plural, name)
 
@@ -131,17 +92,86 @@ def owner_reference(api_version: str, kind: str, name: str, uid: str) -> list[V1
 
 
 def create_or_update_cronjob(batch_api: BatchV1Api, cronjob: V1CronJob) -> None:
-    """Create a CronJob, replacing it if it already exists."""
+    """Create a CronJob, replacing it only when the live one has drifted."""
     namespace = (cronjob.metadata.namespace or "") if cronjob.metadata else ""
     name = (cronjob.metadata.name or "") if cronjob.metadata else ""
     try:
         batch_api.create_namespaced_cron_job(namespace=namespace, body=cronjob)
         logger.info("Created cronjob %s", name)
+        return
     except ApiException as e:
         if e.status != 409:
             raise
-        batch_api.replace_namespaced_cron_job(name=name, namespace=namespace, body=cronjob)
-        logger.info("Updated cronjob %s", name)
+
+    try:
+        existing = batch_api.read_namespaced_cron_job(name=name, namespace=namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        # Deleted between the create attempt and the read: recreate it.
+        batch_api.create_namespaced_cron_job(namespace=namespace, body=cronjob)
+        logger.info("Created cronjob %s", name)
+        return
+
+    drift = _cronjob_drift(existing, cronjob)
+    if drift is None:
+        logger.debug("Cronjob %s is up to date", name)
+        return
+
+    batch_api.replace_namespaced_cron_job(name=name, namespace=namespace, body=cronjob)
+    logger.info("Updated cronjob %s (%s)", name, drift)
+
+
+def _cronjob_drift(existing: V1CronJob, desired: V1CronJob) -> str | None:
+    """The first field the operator sets that differs from the live CronJob.
+
+    Kubernetes adds defaults on read, so the desired object is compared as a subset
+    of the live object rather than for full equality.
+    """
+    desired_meta = desired.metadata.to_dict() if desired.metadata else {}
+    existing_meta = existing.metadata.to_dict() if existing.metadata else {}
+    for field in ("labels", "owner_references"):
+        mismatch = _first_mismatch(desired_meta.get(field), existing_meta.get(field), field)
+        if mismatch is not None:
+            return mismatch
+    if desired.spec is None or existing.spec is None:
+        return None if desired.spec is existing.spec else "spec: one side is missing"
+    return _first_mismatch(desired.spec.to_dict(), existing.spec.to_dict(), "spec")
+
+
+def _first_mismatch(desired: Any, live: Any, path: str) -> str | None:
+    """Describe the first value set in ``desired`` that does not match ``live``.
+
+    ``None`` values in the desired object mean "not managed by the operator" and are
+    ignored, which lets server-defaulted fields pass without a replace.
+    """
+    if desired is None:
+        return None
+    if isinstance(desired, dict):
+        if not isinstance(live, dict):
+            return f"{path}: expected object, found {type(live).__name__}"
+        for key, value in desired.items():
+            if value is None:
+                continue
+            if key not in live:
+                return f"{path}.{key}: missing"
+            mismatch = _first_mismatch(value, live[key], f"{path}.{key}")
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(desired, list):
+        if not isinstance(live, list):
+            return f"{path}: expected list, found {type(live).__name__}"
+        if len(desired) != len(live):
+            return f"{path}: length {len(desired)} != {len(live)}"
+        for index, (desired_item, live_item) in enumerate(zip(desired, live, strict=True)):
+            mismatch = _first_mismatch(desired_item, live_item, f"{path}[{index}]")
+            if mismatch is not None:
+                return mismatch
+        return None
+    if desired != live:
+        return f"{path}: {desired!r} != {live!r}"
+    return None
 
 
 def delete_cronjob(batch_api: BatchV1Api, name: str, namespace: str) -> None:
@@ -154,17 +184,19 @@ def delete_cronjob(batch_api: BatchV1Api, name: str, namespace: str) -> None:
             raise
 
 
-def create_or_update_restore_job(batch_api: BatchV1Api, job: V1Job) -> None:
-    """Create a restore Job, leaving it alone if it already exists."""
+def create_or_update_restore_job(batch_api: BatchV1Api, job: V1Job) -> bool:
+    """Create a restore Job, returning False if it already exists."""
     namespace = (job.metadata.namespace or "") if job.metadata else ""
     name = (job.metadata.name or "") if job.metadata else ""
     try:
         batch_api.create_namespaced_job(namespace=namespace, body=job)
         logger.info("Created restore job %s in %s", name, namespace)
+        return True
     except ApiException as e:
         if e.status != 409:
             raise
         logger.info("Restore job %s already exists in %s", name, namespace)
+        return False
 
 
 def delete_job(batch_api: BatchV1Api, name: str, namespace: str) -> None:
@@ -181,158 +213,74 @@ def delete_job(batch_api: BatchV1Api, name: str, namespace: str) -> None:
             raise
 
 
-# Backup custom resources
-def create_or_update_backup(custom_api: CustomObjectsApi, backup: dict[str, Any]) -> None:
-    """Create or update a Backup custom resource."""
-    name = backup.get("metadata", {}).get("name", "")
-    namespace = backup.get("metadata", {}).get("namespace", "")
-    try:
-        custom_api.create_namespaced_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
-            namespace=namespace,
-            body=backup,
-        )
-        logger.info("Created backup %s", name)
-    except ApiException as e:
-        if e.status != 409:
-            raise
-        custom_api.patch_namespaced_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
-            name=name,
-            namespace=namespace,
-            body=backup,
-        )
-        logger.info("Updated backup %s", name)
-
-
-def patch_backup(
+# BackupSchedule custom resources
+def get_backup_schedule(
     custom_api: CustomObjectsApi,
     name: str,
     namespace: str,
-    body: dict[str, Any],
-) -> None:
-    """Patch a Backup custom resource (spec and/or labels)."""
-    custom_api.patch_namespaced_custom_object(
-        group=CRD_GROUP,
-        version=CRD_VERSION,
-        plural=CRD_PLURAL_BACKUPS,
-        name=name,
-        namespace=namespace,
-        body=body,
-    )
-    logger.info("Patched backup %s in %s", name, namespace)
-
-
-def delete_backup(custom_api: CustomObjectsApi, name: str, namespace: str) -> None:
-    """Delete a Backup custom resource."""
-    try:
-        custom_api.delete_namespaced_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
-            name=name,
-            namespace=namespace,
-        )
-        logger.info("Deleted backup %s in %s", name, namespace)
-    except ApiException as e:
-        if e.status != 404:
-            raise
-
-
-def list_backups_for_schedule(
-    custom_api: CustomObjectsApi,
-    schedule_name: str,
-) -> list[dict[str, Any]]:
-    """List the Backup custom resources that belong to a schedule."""
-    return list_cluster_custom(custom_api, CRD_PLURAL_BACKUPS, f"{LABEL_SCHEDULE}={schedule_name}")
-
-
-def find_backup(
-    custom_api: CustomObjectsApi,
-    backup_ref: str,
-    preferred_namespace: str = "",
 ) -> dict[str, Any] | None:
-    """Find a Backup CR by name, trying a preferred namespace first, else cluster-wide."""
-    if preferred_namespace:
-        try:
-            item: Any = custom_api.get_namespaced_custom_object(
-                group=CRD_GROUP,
-                version=CRD_VERSION,
-                namespace=preferred_namespace,
-                plural=CRD_PLURAL_BACKUPS,
-                name=backup_ref,
-            )
-            if isinstance(item, dict):
-                return item
-        except ApiException as e:
-            if e.status != 404:
-                logger.warning(
-                    "Error looking up Backup %s in %s: %s",
-                    backup_ref,
-                    preferred_namespace,
-                    e,
-                )
-
+    """Get a BackupSchedule by name, or ``None`` if it does not exist."""
     try:
-        result: Any = custom_api.list_cluster_custom_object(
+        item: Any = custom_api.get_namespaced_custom_object(
             group=CRD_GROUP,
             version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
+            namespace=namespace,
+            plural=CRD_PLURAL_BACKUPSCHEDULES,
+            name=name,
         )
-        if isinstance(result, dict):
-            for item in result.get("items", []):
-                if isinstance(item, dict) and item.get("metadata", {}).get("name") == backup_ref:
-                    return item
-    except ApiException:
-        logger.exception("Failed to search for Backup %s", backup_ref)
-    return None
-
-
-# Validation
-def secret_exists(namespace: str, name: str) -> bool:
-    """Return True if a Secret exists in the namespace.
-
-    A missing Secret is an actionable misconfiguration, so it reports ``False``.
-    Any other API error is treated as "present" so a transient outage does not
-    block backups.
-    """
-    if not name:
-        return False
-    try:
-        get_core_api().read_namespaced_secret(name=name, namespace=namespace)
-        return True
     except ApiException as e:
         if e.status == 404:
-            return False
-        logger.warning("Failed to check secret %s in %s: %s", name, namespace, e)
-        return True
-    except (OpenApiException, ValueError, OSError) as e:
-        logger.warning("Failed to check secret %s in %s: %s", name, namespace, e)
-        return True
+            return None
+        raise
+    return item if isinstance(item, dict) else None
 
 
 # Discovery
-def list_pvcs_by_selector(api: client.CoreV1Api, selector: dict[str, str]) -> list[tuple[str, str]]:
-    """List PVC (name, namespace) tuples matching a label selector."""
-    compiled_selectors = ",".join(f"{k}={v}" for k, v in selector.items())
+def list_cronjobs_for_schedule(
+    batch_api: BatchV1Api,
+    namespace: str,
+    schedule_name: str,
+) -> list[V1CronJob]:
+    """List the CronJobs that belong to a schedule."""
     try:
-        pvcs = api.list_persistent_volume_claim_for_all_namespaces(
-            label_selector=compiled_selectors,
+        result = batch_api.list_namespaced_cron_job(
+            namespace=namespace,
+            label_selector=f"{LABEL_SCHEDULE}={schedule_name}",
         )
-        return [
-            (p.metadata.name, p.metadata.namespace)
-            for p in pvcs.items
-            if p.metadata and p.metadata.name and p.metadata.namespace
-        ]
     except ApiException:
-        logger.exception("Failed to list PVCs with selector %s", selector)
+        logger.exception("Failed to list cronjobs for schedule %s in %s", schedule_name, namespace)
         return []
+    return result.items or []
+
+
+def list_pvcs_by_selector(
+    api: client.CoreV1Api,
+    selector: dict[str, str],
+    namespace: str,
+) -> list[str]:
+    """List PVC names matching a label selector in a namespace.
+
+    API errors propagate: treating a failed list as "no PVCs" would make the
+    reconciler delete every CronJob for the schedule.
+    """
+    compiled_selectors = ",".join(f"{k}={v}" for k, v in selector.items())
+    pvcs = api.list_namespaced_persistent_volume_claim(
+        namespace=namespace,
+        label_selector=compiled_selectors,
+    )
+    return [p.metadata.name for p in pvcs.items if p.metadata and p.metadata.name]
 
 
 def list_backup_schedules(api: CustomObjectsApi) -> list[dict[str, Any]]:
-    """List all BackupSchedule custom resources across the cluster."""
-    return list_cluster_custom(api, CRD_PLURAL_BACKUPSCHEDULES)
+    """List all BackupSchedule custom resources across all namespaces."""
+    try:
+        result: Any = api.list_custom_object_for_all_namespaces(
+            group=CRD_GROUP,
+            version=CRD_VERSION,
+            resource_plural=CRD_PLURAL_BACKUPSCHEDULES,
+        )
+    except ApiException:
+        logger.exception("Failed to list %s", CRD_PLURAL_BACKUPSCHEDULES)
+        return []
+    items = result.get("items", []) if isinstance(result, dict) else []
+    return [item for item in items if isinstance(item, dict)]

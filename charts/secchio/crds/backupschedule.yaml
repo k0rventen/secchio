@@ -13,7 +13,7 @@ spec:
     singular: backupschedule
     shortNames:
       - bks
-  scope: Cluster
+  scope: Namespaced
   versions:
     - name: v1alpha1
       served: true
@@ -57,16 +57,27 @@ spec:
               properties:
                 pvc:
                   type: object
-                  description: Label selector to match PVCs (cluster-scoped)
+                  description: Label selector to match PVCs in the schedule's namespace
+                  required:
+                    - selector
                   properties:
                     selector:
                       type: object
                       description: Label selector to match PVCs
+                      minProperties: 1
                       additionalProperties:
                         type: string
                 schedule:
                   type: string
                   description: Cron expression for backup schedule (e.g. 0 2 * * *)
+                  minLength: 1
+                  pattern: '^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|(\S+\s+){4}\S+)$'
+                timeZone:
+                  type: string
+                  description: >-
+                    IANA timezone name for the schedule (e.g. Europe/Brussels).
+                    Defaults to the controller's timezone (UTC) when omitted.
+                  pattern: '^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+)*$'
                 repo:
                   type: object
                   required:
@@ -76,9 +87,11 @@ spec:
                     endpoint:
                       type: string
                       description: Full S3 endpoint URL (my-s3.my-domain/bucket)
+                      minLength: 1
                     secretName:
                       type: string
                       description: Kubernetes Secret with AWS credentials
+                      minLength: 1
                     insecureTLS:
                       type: boolean
                       description: Skip TLS verification when talking to the S3 endpoint
@@ -89,12 +102,16 @@ spec:
                   properties:
                     keepDaily:
                       type: integer
+                      minimum: 0
                     keepWeekly:
                       type: integer
+                      minimum: 0
                     keepMonthly:
                       type: integer
+                      minimum: 0
                     keepYearly:
                       type: integer
+                      minimum: 0
             status:
               type: object
               properties:
@@ -122,3 +139,39 @@ spec:
                       type: integer
                     runningBackups:
                       type: integer
+                backups:
+                  type: array
+                  description: Per-PVC backup status
+                  items:
+                    type: object
+                    properties:
+                      pvcName:
+                        type: string
+                        description: PVC this entry tracks
+                      cronjobName:
+                        type: string
+                        description: CronJob that backs up this PVC
+                      phase:
+                        type: string
+                        description: Current phase (Pending/Running/Completed/Failed)
+                      lastBackupTime:
+                        type: string
+                        description: Timestamp of the last backup completion
+                      snapshots:
+                        type: array
+                        description: Available snapshots in the restic repository
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            time:
+                              type: string
+                            size:
+                              type: integer
+                      message:
+                        type: string
+                        description: Status or error details
+                      reason:
+                        type: string
+                        description: Machine-readable failure reason

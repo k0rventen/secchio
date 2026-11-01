@@ -1,20 +1,18 @@
 """Round-trip tests for the CRD models.
 
-These guard the wire contract: the field aliases must match the CRD schemas, and
-a spec that is dumped and re-validated must compare equal (the desired/live diff
-in the schedule reconciler relies on that equality).
+These guard the wire contract: field aliases must match the CRD schemas, and a
+spec that is dumped and re-validated must compare equal.
 """
 
 from __future__ import annotations
 
 from crds import (
-    Backup,
-    BackupPhase,
+    BackupEntry,
+    BackupSchedule,
     BackupScheduleSpec,
     BackupScheduleStatus,
     BackupScheduleSummary,
-    BackupSpec,
-    BackupStatus,
+    Phase,
     Restore,
     RestoreSpec,
     RestoreStatus,
@@ -22,76 +20,6 @@ from crds import (
     SchedulePhase,
     SnapshotInfo,
 )
-
-
-def test_backup_spec_wire_keys() -> None:
-    spec = BackupSpec(pvc_name="nginx", pvc_namespace="backup-test", schedule="0 2 * * *")
-    assert set(spec.model_dump(by_alias=True)) == {
-        "pvcName",
-        "pvcNamespace",
-        "repo",
-        "retention",
-        "schedule",
-        "secretName",
-    }
-
-
-def test_backup_spec_round_trips() -> None:
-    spec = BackupSpec(pvc_name="nginx", pvc_namespace="backup-test", schedule="0 2 * * *")
-    assert BackupSpec.model_validate(spec.model_dump(by_alias=True)) == spec
-
-
-def test_backup_status_wire_keys() -> None:
-    status = BackupStatus(
-        phase=BackupPhase.COMPLETED,
-        last_backup_time="2026-01-01T00:00:00Z",
-        snapshots=[
-            SnapshotInfo(id="abc123", time="2026-01-01T00:00:00Z", size=1024),
-            SnapshotInfo(id="def456", time="2026-01-02T00:00:00Z", size=2048),
-        ],
-    )
-    dump = status.model_dump(by_alias=True, mode="json")
-    assert set(dump) == {
-        "phase",
-        "lastBackupTime",
-        "snapshots",
-        "message",
-        "reason",
-    }
-    assert dump["snapshots"] == [
-        {"id": "abc123", "time": "2026-01-01T00:00:00Z", "size": 1024},
-        {"id": "def456", "time": "2026-01-02T00:00:00Z", "size": 2048},
-    ]
-
-
-def test_backup_from_crd() -> None:
-    item = {
-        "metadata": {
-            "name": "bk",
-            "namespace": "ns",
-            "uid": "u1",
-            "labels": {"secchio.cocointhe.cloud/schedule": "nginx"},
-            "creationTimestamp": "2026-01-01T00:00:00Z",
-        },
-        "spec": {"pvcName": "nginx", "pvcNamespace": "ns", "schedule": "* * * * *"},
-        "status": {
-            "phase": "Completed",
-            "snapshots": [
-                {"id": "a", "time": "t1", "size": 10},
-                {"id": "b", "time": "t2", "size": 20},
-            ],
-        },
-    }
-    bk = Backup.from_crd(item)
-    assert bk.name == "bk"
-    assert bk.namespace == "ns"
-    assert bk.uid == "u1"
-    assert bk.labels == {"secchio.cocointhe.cloud/schedule": "nginx"}
-    assert bk.status.phase == BackupPhase.COMPLETED
-    assert [(s.id, s.time, s.size) for s in bk.status.snapshots] == [
-        ("a", "t1", 10),
-        ("b", "t2", 20),
-    ]
 
 
 def test_schedule_spec_and_restic_rendering() -> None:
@@ -111,6 +39,20 @@ def test_schedule_spec_and_restic_rendering() -> None:
     assert spec.retention.to_restic_args() == ["--keep-daily", "4", "--keep-weekly", "2"]
 
 
+def test_schedule_time_zone_wire_key() -> None:
+    spec = BackupScheduleSpec.model_validate(
+        {
+            "pvc": {"selector": {"app": "nginx"}},
+            "schedule": "0 2 * * *",
+            "timeZone": "Europe/Brussels",
+            "repo": {"endpoint": "minio/bucket", "secretName": "s3"},
+        }
+    )
+    assert spec.time_zone == "Europe/Brussels"
+    assert spec.model_dump(by_alias=True)["timeZone"] == "Europe/Brussels"
+    assert BackupScheduleSpec.model_validate(spec.model_dump(by_alias=True)) == spec
+
+
 def test_repo_insecure_tls_wire_key() -> None:
     repo = S3BackendConfig.model_validate(
         {"endpoint": "minio/bucket", "secretName": "s3", "insecureTLS": True}
@@ -124,15 +66,36 @@ def test_repo_insecure_tls_wire_key() -> None:
 
 
 def test_schedule_status_wire_keys() -> None:
-    status = BackupScheduleStatus(phase=SchedulePhase.HEALTHY, all_ok=True)
+    status = BackupScheduleStatus(
+        phase=SchedulePhase.HEALTHY,
+        all_ok=True,
+        backups=[
+            BackupEntry(
+                pvc_name="data",
+                cronjob_name="sched-backup-data-cronjob",
+                phase=Phase.COMPLETED,
+                snapshots=[SnapshotInfo(id="abc", time="t", size=1)],
+            )
+        ],
+    )
     dump = status.model_dump(by_alias=True, mode="json")
-    assert set(dump) == {"phase", "allOk", "lastBackupTime", "message", "summary"}
+    assert set(dump) == {
+        "phase",
+        "allOk",
+        "lastBackupTime",
+        "message",
+        "summary",
+        "backups",
+    }
     assert set(dump["summary"]) == {
         "totalBackups",
         "healthyBackups",
         "failedBackups",
         "runningBackups",
     }
+    assert dump["backups"][0]["pvcName"] == "data"
+    assert dump["backups"][0]["cronjobName"] == "sched-backup-data-cronjob"
+    assert dump["backups"][0]["snapshots"] == [{"id": "abc", "time": "t", "size": 1}]
 
 
 def test_schedule_summary_defaults_to_zero() -> None:
@@ -141,27 +104,49 @@ def test_schedule_summary_defaults_to_zero() -> None:
     )
 
 
+def test_backup_schedule_from_crd_reads_entries() -> None:
+    schedule = BackupSchedule.from_crd(
+        {
+            "metadata": {"name": "sched", "namespace": "ns", "uid": "u1"},
+            "spec": {
+                "pvc": {"selector": {"app": "data"}},
+                "schedule": "0 2 * * *",
+                "repo": {"endpoint": "minio/bucket", "secretName": "creds"},
+            },
+            "status": {
+                "backups": [
+                    {
+                        "pvcName": "data",
+                        "cronjobName": "sched-backup-data-cronjob",
+                        "phase": "Completed",
+                    }
+                ]
+            },
+        }
+    )
+    assert schedule.name == "sched"
+    assert schedule.namespace == "ns"
+    assert schedule.status.backups[0].pvc_name == "data"
+    assert schedule.status.backups[0].phase == Phase.COMPLETED
+
+
 def test_restore_spec_and_status() -> None:
     spec = RestoreSpec.model_validate(
         {
-            "targetPVC": "app-data",
-            "targetPVCNamespace": "backup-test",
-            "backupRef": "bk1",
-            "sourcePVC": "src",
-            "sourcePVCNamespace": "ns",
+            "scheduleName": "sched",
+            "pvcName": "data",
+            "targetPVC": "data-restore",
             "snapshotID": "abc",
         }
     )
-    assert spec.target_pvc == "app-data"
-    assert spec.target_pvc_namespace == "backup-test"
-    assert spec.source_pvc == "src"
+    assert spec.schedule_name == "sched"
+    assert spec.pvc_name == "data"
+    assert spec.target_pvc == "data-restore"
     assert spec.snapshot_id == "abc"
     assert set(spec.model_dump(by_alias=True)) == {
+        "scheduleName",
+        "pvcName",
         "targetPVC",
-        "targetPVCNamespace",
-        "backupRef",
-        "sourcePVC",
-        "sourcePVCNamespace",
         "snapshotID",
     }
 
@@ -183,22 +168,22 @@ def test_restore_spec_and_status() -> None:
 
 def test_status_phase_is_tolerant_of_unknown_values() -> None:
     # The operator must not crash on a phase value it does not recognise.
-    assert str(BackupStatus.model_validate({"phase": ""}).phase) == ""
-    assert str(BackupStatus.model_validate({"phase": "Weird"}).phase) == "Weird"
-    assert BackupStatus().phase == BackupPhase.PENDING
+    assert str(BackupEntry.model_validate({"phase": ""}).phase) == ""
+    assert str(BackupEntry.model_validate({"phase": "Weird"}).phase) == "Weird"
+    assert BackupEntry().phase == Phase.PENDING
 
 
 def test_to_crd_body_has_metadata_and_spec_only() -> None:
-    backup = Backup(
-        name="bk",
+    restore = Restore(
+        name="r1",
         namespace="ns",
         labels={"a": "b"},
-        spec=BackupSpec(pvc_name="data", pvc_namespace="ns"),
+        spec=RestoreSpec(schedule_name="sched", pvc_name="data"),
     )
-    body = backup.to_crd_body("secchio.cocointhe.cloud", "v1alpha1")
+    body = restore.to_crd_body("secchio.cocointhe.cloud", "v1alpha1")
 
     assert body["apiVersion"] == "secchio.cocointhe.cloud/v1alpha1"
-    assert body["kind"] == "Backup"
-    assert body["metadata"] == {"name": "bk", "namespace": "ns", "labels": {"a": "b"}}
-    assert body["spec"]["pvcName"] == "data"
+    assert body["kind"] == "Restore"
+    assert body["metadata"] == {"name": "r1", "namespace": "ns", "labels": {"a": "b"}}
+    assert body["spec"]["scheduleName"] == "sched"
     assert "status" not in body

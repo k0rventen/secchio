@@ -8,12 +8,13 @@ a small web UI from which you can view and trigger backups and restores.
 
 ## Overview
 
-Three custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe backup/restore
+Two custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe backup/restore
 intent; the operator turns them into native Kubernetes workloads:
 
-- **BackupSchedule**: matches PVCs by label and manages one `Backup` per match.
-- **Backup**: owns a CronJob in the PVC's namespace.
-- **Restore**: owns a one-off Job that restores a snapshot into a PVC.
+- **BackupSchedule**: matches PVCs by label in its namespace and owns one CronJob per
+  match. Per-PVC status lives in `status.backups`.
+- **Restore**: owns a one-off Job that restores a snapshot into a PVC. A Restore is
+  immutable once created; delete and recreate it to run again.
 
 The CronJob/Job pods are the only things that touch restic and the S3 repository.
 The operator only orchestrates native objects, so existing backups keep running even
@@ -49,8 +50,8 @@ kubectl port-forward -n secchio-system svc/secchio-ui 8000:8000
 then open <http://localhost:8000>.
 
 > The chart intentionally does not expose the UI through an Ingress, because of the
-> nature of the actions available (triggering backups and restores). Adding
-> authentication is out of scope; use a port-forward or a solution like
+> nature of the actions available (triggering restores could corrupt an app). Adding
+> authentication is out of scope; use a port-forward, add your own ingress or a solution like
 > [warpgate](https://github.com/warp-tech/warpgate) to secure access.
 
 ## Uninstalling
@@ -65,7 +66,6 @@ helm uninstall secchio-operator -n secchio-system
 > ```sh
 > kubectl delete crd \
 >   backupschedules.secchio.cocointhe.cloud \
->   backups.secchio.cocointhe.cloud \
 >   restores.secchio.cocointhe.cloud
 > ```
 
@@ -98,6 +98,7 @@ apiVersion: secchio.cocointhe.cloud/v1alpha1
 kind: BackupSchedule
 metadata:
   name: python-notes
+  namespace: production
 spec:
   pvc:
     selector:
@@ -113,11 +114,13 @@ spec:
     keepMonthly: 3
 ```
 
-# Caveat
-The credentials Secret must exist in **each namespace** where backups run, because
-the backup pods are created in the PVC's namespace. If it is missing, the operator
-reports the `Backup` as `Failed` with `reason: SecretNotFound` and does not create
-the CronJob.
+# Namespaces
+`BackupSchedule` is namespaced: it only selects PVCs in its own namespace, and the
+credentials Secret is read from that same namespace. Create one Secret and one
+`BackupSchedule` per namespace you want to back up. If the Secret is missing, the
+CronJob is still created; the first run's pod fails with
+`CreateContainerConfigError`, and the operator copies that message onto the
+schedule's per-PVC status entry.
 
 ## Links
 

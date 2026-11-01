@@ -1,15 +1,15 @@
 """Reading Job outcomes back into CR status.
 
 A restic Job reports what happened through its pod's termination log; this module
-turns a finished Job into ``Backup``/``Restore`` status and aggregates child Backup
-statuses into the ``BackupSchedule``. It writes status, but never creates workloads
-(that is :mod:`reconcile`).
+turns a finished Job into a per-PVC entry on the owning ``BackupSchedule`` (or a
+``Restore`` status). It writes status, but never creates workloads.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import threading
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
@@ -19,34 +19,44 @@ from kubernetes.client.exceptions import ApiException, OpenApiException
 
 import k8s
 from common import (
-    CRD_GROUP,
-    CRD_PLURAL_BACKUPS,
     CRD_PLURAL_BACKUPSCHEDULES,
     CRD_PLURAL_RESTORES,
-    CRD_VERSION,
-    LABEL_BACKUP,
+    LABEL_PVC_NAME,
     LABEL_RESTORE,
-    extract_backup_name,
+    LABEL_SCHEDULE,
+    extract_pvc_name,
     extract_restore_name,
     extract_schedule_name,
+    make_cronjob_name,
     now_iso,
 )
 from crds import (
-    Backup,
-    BackupPhase,
+    BackupEntry,
+    BackupSchedule,
     BackupScheduleStatus,
     BackupScheduleSummary,
-    BackupStatus,
-    RestorePhase,
+    Phase,
     RestoreStatus,
     SchedulePhase,
 )
-from restic import extract_termination_info
+from restic import TerminationInfo, extract_termination_info
 
 logger = logging.getLogger("status")
 
 # Bare client used only to normalize kubernetes-client objects to plain dicts.
 _api_client = ApiClient()
+
+# Serialize read-modify-write cycles on a schedule's status. This is process-local
+# coordination only; the operator keeps no durable state.
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def schedule_lock(namespace: str, schedule_name: str) -> threading.Lock:
+    """Return the process-local lock that serializes a schedule's status writes."""
+    key = f"{namespace}/{schedule_name}"
+    with _locks_guard:
+        return _locks.setdefault(key, threading.Lock())
 
 
 @dataclass
@@ -87,16 +97,10 @@ class JobStatus:
 
 
 def _failed_reason(conditions: Any) -> str:
-    """Message of a Job's ``Failed`` condition, if any.
-
-    Accepts both kopf's raw dicts and the kubernetes client's condition objects.
-    """
+    """Message of a Job's ``Failed`` condition, if any."""
     for cond in conditions or []:
-        if isinstance(cond, dict):
-            if cond.get("type") == "Failed" and cond.get("status") == "True":
-                return cond.get("message") or cond.get("reason") or ""
-        elif cond.type == "Failed" and cond.status == "True":
-            return cond.message or cond.reason or ""
+        if cond.get("type") == "Failed" and cond.get("status") == "True":
+            return cond.get("message") or cond.get("reason") or ""
     return ""
 
 
@@ -109,12 +113,7 @@ def _job_creation_time(job: V1Job) -> float:
 
 
 def _parse_timestamp(value: str) -> datetime | None:
-    """Parse an ISO-8601 timestamp (``Z`` or ``+00:00`` offset).
-
-    Kubernetes emits ``...Z`` while :func:`common.now_iso` emits ``...+00:00``;
-    comparing the raw strings would mis-order the same instant, so callers compare
-    the parsed values instead. Returns ``None`` for empty or unparseable input.
-    """
+    """Parse an ISO-8601 timestamp (``Z`` or ``+00:00`` offset)."""
     if not value:
         return None
     try:
@@ -123,30 +122,104 @@ def _parse_timestamp(value: str) -> datetime | None:
         return None
 
 
-def job_status(job: JobStatus) -> None:
-    """Route a Job outcome to the Backup or Restore resource that owns it."""
+def job_event(job: JobStatus) -> None:
+    """Route a Job event to the CR that owns it.
+
+    A PVC can have several Jobs (scheduled and manual). An event for an older Job
+    (for example its TTL deletion, or a replay after an operator restart) must not
+    overwrite a newer run, so backup events re-sync from the newest Job.
+    """
     if not job.namespace:
         return
     if restore_name := extract_restore_name(job.labels):
         _sync_restore_from_job(job, restore_name)
-    elif backup_name := extract_backup_name(job.labels):
-        _sync_backup_from_job(job, backup_name)
+    elif schedule_name := extract_schedule_name(job.labels):
+        pvc_name = extract_pvc_name(job.labels)
+        if pvc_name:
+            sync_backup_entry(schedule_name, job.namespace, pvc_name)
 
 
-def backup_status(name: str, namespace: str) -> None:
-    """Sync a Backup's status from its most recent Job."""
-    try:
-        # Restore Jobs also carry LABEL_BACKUP (the source Backup), so exclude them
-        # explicitly; otherwise the newest Restore Job could shadow the real one.
-        jobs = k8s.get_batch_api().list_namespaced_job(
-            namespace=namespace,
-            label_selector=f"{LABEL_BACKUP}={name},!{LABEL_RESTORE}",
-        )
+def sync_backup_entry(schedule_name: str, namespace: str, pvc_name: str) -> None:
+    """Sync one schedule entry from the newest Job for that PVC."""
+    with schedule_lock(namespace, schedule_name):
+        try:
+            jobs = k8s.get_batch_api().list_namespaced_job(
+                namespace=namespace,
+                label_selector=(
+                    f"{LABEL_SCHEDULE}={schedule_name},{LABEL_PVC_NAME}={pvc_name},!{LABEL_RESTORE}"
+                ),
+            )
+        except (ApiException, OpenApiException, ValueError, OSError) as e:
+            logger.warning("Failed to list jobs for %s/%s: %s", schedule_name, pvc_name, e)
+            return
         if not jobs.items:
             return
-        job_status(JobStatus.from_job(max(jobs.items, key=_job_creation_time)))
-    except (ApiException, OpenApiException, ValueError, OSError) as e:
-        logger.warning("Failed to sync backup status from jobs for %s: %s", name, e)
+
+        job = JobStatus.from_job(max(jobs.items, key=_job_creation_time))
+        entry = _entry_from_job(job, schedule_name, pvc_name)
+        if entry is not None:
+            _patch_schedule_entry(schedule_name, namespace, entry)
+
+
+def _entry_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> BackupEntry | None:
+    """Build the per-PVC status entry from a Job outcome."""
+    entry = BackupEntry(
+        pvc_name=pvc_name,
+        cronjob_name=make_cronjob_name(schedule_name, pvc_name),
+    )
+    if job.succeeded:
+        info = extract_termination_info(job.name, job.namespace)
+        entry.phase = Phase.COMPLETED
+        entry.last_backup_time = job.completion_time or now_iso()
+        entry.snapshots = info.snapshots
+        entry.message = "Backup completed successfully"
+    elif job.failed:
+        info = extract_termination_info(job.name, job.namespace)
+        entry.phase = Phase.FAILED
+        entry.last_backup_time = job.start_time or now_iso()
+        entry.snapshots = info.snapshots
+        entry.message = f"Backup failed: {_failure_reason(info, job, 'Backup job failed')}"
+        entry.reason = info.waiting_reason
+    elif job.active:
+        entry.phase = Phase.RUNNING
+        entry.last_backup_time = job.start_time
+        entry.message = f"Backup job {job.name} is running"
+    else:
+        # Pending/unknown Job: keep the previous entry rather than resetting it.
+        return None
+    return entry
+
+
+def _patch_schedule_entry(schedule_name: str, namespace: str, entry: BackupEntry) -> None:
+    """Replace one entry in the schedule status and recompute the aggregate."""
+    custom_api = k8s.get_custom_objects_api()
+    item = k8s.get_backup_schedule(custom_api, schedule_name, namespace)
+    if item is None:
+        return
+
+    schedule = BackupSchedule.from_crd(item)
+    entries = {existing.pvc_name: existing for existing in schedule.status.backups}
+    entries[entry.pvc_name] = entry
+    k8s.patch_status(
+        custom_api,
+        plural=CRD_PLURAL_BACKUPSCHEDULES,
+        name=schedule_name,
+        namespace=namespace,
+        status=aggregate_schedule_status(entries.values()),
+    )
+
+
+def _failure_reason(info: TerminationInfo, job: JobStatus, fallback: str) -> str:
+    """The most specific failure reason available for a failed Job."""
+    if info.error:
+        return info.error
+    if info.waiting_message:
+        if info.waiting_reason:
+            return f"{info.waiting_reason}: {info.waiting_message}"
+        return info.waiting_message
+    if info.waiting_reason:
+        return info.waiting_reason
+    return job.failure_reason or fallback
 
 
 def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
@@ -156,22 +229,22 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
 
     if job.succeeded:
         status = RestoreStatus(
-            phase=RestorePhase.COMPLETED,
+            phase=Phase.COMPLETED,
             completion_time=job.completion_time or now_iso(),
             snapshot_id=snapshot,
             message="Restore completed successfully",
         )
     elif job.failed:
-        reason = info.error or job.failure_reason or "Restore job failed"
+        reason = _failure_reason(info, job, "Restore job failed")
         status = RestoreStatus(
-            phase=RestorePhase.FAILED,
+            phase=Phase.FAILED,
             completion_time=now_iso(),
             snapshot_id=snapshot,
             message=f"Restore failed: {reason}",
         )
     elif job.active:
         status = RestoreStatus(
-            phase=RestorePhase.RUNNING,
+            phase=Phase.RUNNING,
             start_time=job.start_time or now_iso(),
             snapshot_id=snapshot,
             message=f"Restore job {job.name} is running",
@@ -188,143 +261,72 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
     )
 
 
-def _sync_backup_from_job(job: JobStatus, backup_name: str) -> None:
-    """Update a Backup, and the BackupSchedule that owns it, from the Job's outcome."""
-    custom_api = k8s.get_custom_objects_api()
-    schedule_name = extract_schedule_name(job.labels)
-
-    if job.succeeded:
-        info = extract_termination_info(job.name, job.namespace)
-        status = BackupStatus(
-            phase=BackupPhase.COMPLETED,
-            last_backup_time=job.completion_time or now_iso(),
-            snapshots=info.snapshots,
-            message="Backup completed successfully",
-        )
-    elif job.failed:
-        info = extract_termination_info(job.name, job.namespace)
-        reason = info.error or job.failure_reason or "Backup job failed"
-        status = BackupStatus(
-            phase=BackupPhase.FAILED,
-            last_backup_time=job.start_time or now_iso(),
-            snapshots=info.snapshots,
-            message=f"Backup failed: {reason}",
-        )
-    elif job.active:
-        status = BackupStatus(
-            phase=BackupPhase.RUNNING,
-            last_backup_time=job.start_time,
-            message=f"Backup job {job.name} is running",
-        )
-    else:
-        return
-
-    _update_backup_status(custom_api, backup_name, job.namespace, status)
-    if schedule_name:
-        reconcile_schedule_status(custom_api, schedule_name)
-
-
-def _update_backup_status(
-    custom_api: CustomObjectsApi,
-    name: str,
-    namespace: str,
-    status: BackupStatus,
-) -> None:
-    """Patch a Backup's status, keeping snapshot history when the new status has none."""
-    if not status.snapshots:
-        previous = _read_backup_status(custom_api, name, namespace)
-        status.snapshots = previous.snapshots
-
-    k8s.patch_status(
-        custom_api,
-        plural=CRD_PLURAL_BACKUPS,
-        name=name,
-        namespace=namespace,
-        status=status,
-    )
-
-
-def _read_backup_status(custom_api: CustomObjectsApi, name: str, namespace: str) -> BackupStatus:
-    """Read a Backup's current status, or an empty one if it cannot be read."""
-    try:
-        obj: Any = custom_api.get_namespaced_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=CRD_PLURAL_BACKUPS,
-            name=name,
-            namespace=namespace,
-        )
-        if isinstance(obj, dict):
-            return Backup.from_crd(obj).status
-    except ApiException:
-        pass
-    return BackupStatus()
-
-
-def reconcile_schedule_status(custom_api: CustomObjectsApi, schedule_name: str) -> None:
-    """Aggregate the status of all child Backups into the BackupSchedule status."""
-    items = k8s.list_backups_for_schedule(custom_api, schedule_name)
-    if not items:
-        status = BackupScheduleStatus(
+def aggregate_schedule_status(entries: Iterable[BackupEntry]) -> BackupScheduleStatus:
+    """Compute the schedule-level status from its per-PVC entries."""
+    entries = list(entries)
+    if not entries:
+        return BackupScheduleStatus(
             phase=SchedulePhase.PENDING,
             all_ok=False,
             last_backup_time="",
             message="No matching PVCs or backups found",
             summary=BackupScheduleSummary(),
+            backups=[],
         )
+
+    total = len(entries)
+    healthy = sum(1 for entry in entries if entry.phase == Phase.COMPLETED)
+    failed = sum(1 for entry in entries if entry.phase == Phase.FAILED)
+    running = sum(1 for entry in entries if entry.phase == Phase.RUNNING)
+
+    latest_backup_time = ""
+    latest_backup_dt: datetime | None = None
+    for entry in entries:
+        parsed = _parse_timestamp(entry.last_backup_time)
+        if parsed is not None and (latest_backup_dt is None or parsed > latest_backup_dt):
+            latest_backup_dt = parsed
+            latest_backup_time = entry.last_backup_time
+
+    all_ok = healthy == total
+    if failed:
+        phase = SchedulePhase.DEGRADED
+        message = f"{failed}/{total} backups failed"
+    elif running:
+        phase = SchedulePhase.RUNNING
+        message = f"{running}/{total} backups running"
+    elif all_ok:
+        phase = SchedulePhase.HEALTHY
+        message = f"All {total} backups healthy"
     else:
-        total = len(items)
-        healthy = 0
-        failed = 0
-        running = 0
-        latest_backup_time = ""
-        latest_backup_dt: datetime | None = None
+        phase = SchedulePhase.PENDING
+        message = f"{healthy}/{total} backups completed"
 
-        for item in items:
-            backup = Backup.from_crd(item)
-            phase = backup.status.phase
-            if phase == BackupPhase.COMPLETED:
-                healthy += 1
-            elif phase == BackupPhase.FAILED:
-                failed += 1
-            elif phase == BackupPhase.RUNNING:
-                running += 1
+    return BackupScheduleStatus(
+        phase=phase,
+        all_ok=all_ok,
+        last_backup_time=latest_backup_time,
+        message=message,
+        summary=BackupScheduleSummary(
+            total_backups=total,
+            healthy_backups=healthy,
+            failed_backups=failed,
+            running_backups=running,
+        ),
+        backups=entries,
+    )
 
-            parsed = _parse_timestamp(backup.status.last_backup_time)
-            if parsed is not None and (latest_backup_dt is None or parsed > latest_backup_dt):
-                latest_backup_dt = parsed
-                latest_backup_time = backup.status.last_backup_time
 
-        all_ok = total > 0 and healthy == total
-        if failed > 0:
-            phase = SchedulePhase.DEGRADED
-            message = f"{failed}/{total} backups failed"
-        elif running > 0:
-            phase = SchedulePhase.RUNNING
-            message = f"{running}/{total} backups running"
-        elif all_ok:
-            phase = SchedulePhase.HEALTHY
-            message = f"All {total} backups healthy"
-        else:
-            phase = SchedulePhase.PENDING
-            message = f"{healthy}/{total} backups completed"
-
-        status = BackupScheduleStatus(
-            phase=phase,
-            all_ok=all_ok,
-            last_backup_time=latest_backup_time,
-            message=message,
-            summary=BackupScheduleSummary(
-                total_backups=total,
-                healthy_backups=healthy,
-                failed_backups=failed,
-                running_backups=running,
-            ),
-        )
-
+def reconcile_schedule_status(
+    custom_api: CustomObjectsApi,
+    schedule_name: str,
+    namespace: str,
+    entries: Iterable[BackupEntry],
+) -> None:
+    """Patch the schedule status from the given per-PVC entries."""
     k8s.patch_status(
         custom_api,
         plural=CRD_PLURAL_BACKUPSCHEDULES,
         name=schedule_name,
-        status=status,
+        namespace=namespace,
+        status=aggregate_schedule_status(entries),
     )

@@ -36,13 +36,12 @@ When starting the project, I had a few things in mind:
 
 ## Architecture
 
-Three custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe backup/restore intent; the
-operator turns them into native workloads that kubernetes can execute.
+Two custom resources (`secchio.cocointhe.cloud/v1alpha1`) describe backup/restore intent;
+the operator turns them into native workloads that kubernetes can execute.
 
 ```mermaid
 flowchart TD
-    BS["BackupSchedule (cluster-scoped)"]
-    BK["Backup (namespaced, per PVC)"]
+    BS["BackupSchedule (namespaced)"]
     RT["Restore (namespaced)"]
 
     CJ["CronJob (batch/v1)"]
@@ -50,8 +49,7 @@ flowchart TD
     POD["restic pod"]
     S3[("S3-compatible repo")]
 
-    BS -->|"one Backup per matching PVC"| BK
-    BK -->|"owns one"| CJ
+    BS -->|"one CronJob per matching PVC"| CJ
     CJ -->|"each cron tick spawns a"| JOB
     JOB --> POD
     RT -->|"owns one"| JOB2["Job (batch/v1)"]
@@ -59,9 +57,10 @@ flowchart TD
     POD -->|"init + backup + forget, or restore"| S3
 ```
 
-A `BackupSchedule` matches PVCs by label and manages one `Backup` per match.
-Each `Backup` owns a CronJob (namespace = the PVC's namespace). Each `Restore`
-owns a one-off Job. The CronJob/Job pods are the only things that touch restic and
+A `BackupSchedule` matches PVCs by label within its own namespace and manages one
+CronJob per match. Per-PVC status (phase, last backup, snapshots) is stored in
+`status.backups`. Each `Restore` owns a one-off Job and is immutable once created —
+delete and recreate it to run a restore again. The CronJob/Job pods are the only things that touch restic and
 the S3 repository.
 
 ### Quickstart
@@ -96,6 +95,7 @@ apiVersion: secchio.cocointhe.cloud/v1alpha1
 kind: BackupSchedule
 metadata:
   name: python-notes
+  namespace: production
 spec:
   pvc:
     selector:
@@ -119,6 +119,26 @@ Have a look at tests/test-manifests.yaml for a full example.
 tilt up --stream
 ```
 The secchio UI will be available on http://localhost:8002
+
+## Uninstall
+
+Uninstall the operator:
+
+```sh
+helm uninstall secchio-operator -n secchio-system
+```
+
+Helm does **not** delete CRDs installed from the chart's `crds/` directory, nor the
+custom resources. Remove them explicitly:
+
+```sh
+kubectl delete crd \
+  backupschedules.secchio.cocointhe.cloud \
+  restores.secchio.cocointhe.cloud
+```
+
+Deleting the CRDs also deletes every `BackupSchedule` and `Restore` object. Your restic
+snapshots in S3 are not touched.
 
 ## Inspiration and credits
 

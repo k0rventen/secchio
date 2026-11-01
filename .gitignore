@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 secchio.egg-info/
 docs/
+tests/test-manifests.yaml
