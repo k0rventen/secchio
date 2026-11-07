@@ -26,7 +26,6 @@ rules:
   resources:
   - pods
   - persistentvolumeclaims
-  - namespaces
   verbs:
   - get
   - list
