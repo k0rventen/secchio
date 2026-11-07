@@ -161,6 +161,25 @@ def sync_backup_entry(schedule_name: str, namespace: str, pvc_name: str) -> None
             _patch_schedule_entry(schedule_name, namespace, entry)
 
 
+def resync_schedule(schedule_name: str, namespace: str) -> None:
+    """Refresh every per-PVC entry from its newest Job.
+
+    Job watch events can be missed (operator restart, watch interruption, or a pod
+    that is already gone when the event arrives). The schedule timer calls this so
+    status converges even when no event was delivered.
+    """
+    try:
+        item = k8s.get_backup_schedule(k8s.get_custom_objects_api(), schedule_name, namespace)
+    except (ApiException, OpenApiException, ValueError, OSError) as e:
+        logger.warning("Failed to read schedule %s/%s for resync: %s", namespace, schedule_name, e)
+        return
+    if item is None:
+        return
+
+    for entry in BackupSchedule.from_crd(item).status.backups:
+        sync_backup_entry(schedule_name, namespace, entry.pvc_name)
+
+
 def _entry_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> BackupEntry | None:
     """Build the per-PVC status entry from a Job outcome."""
     entry = BackupEntry(
@@ -191,7 +210,7 @@ def _entry_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> Backup
 
 
 def _patch_schedule_entry(schedule_name: str, namespace: str, entry: BackupEntry) -> None:
-    """Replace one entry in the schedule status and recompute the aggregate."""
+    """Merge one entry into the schedule status and recompute the aggregate."""
     custom_api = k8s.get_custom_objects_api()
     item = k8s.get_backup_schedule(custom_api, schedule_name, namespace)
     if item is None:
@@ -199,14 +218,34 @@ def _patch_schedule_entry(schedule_name: str, namespace: str, entry: BackupEntry
 
     schedule = BackupSchedule.from_crd(item)
     entries = {existing.pvc_name: existing for existing in schedule.status.backups}
+    existing = entries.get(entry.pvc_name)
+    if existing is not None:
+        entry = _merge_entry(existing, entry)
     entries[entry.pvc_name] = entry
+
+    new_status = aggregate_schedule_status(entries.values())
+    if new_status == schedule.status:
+        return
     k8s.patch_status(
         custom_api,
         plural=CRD_PLURAL_BACKUPSCHEDULES,
         name=schedule_name,
         namespace=namespace,
-        status=aggregate_schedule_status(entries.values()),
+        status=new_status,
     )
+
+
+def _merge_entry(existing: BackupEntry, new: BackupEntry) -> BackupEntry:
+    """Keep the snapshots already known when a Job reports none.
+
+    A running Job, a failed Job, or a Job whose pod is already gone reports no
+    snapshots. Replacing the entry wholesale would erase the snapshots the
+    schedule already knows about, which is what made them disappear from the CRD
+    and the UI after a successful run.
+    """
+    if new.snapshots:
+        return new
+    return new.model_copy(update={"snapshots": existing.snapshots})
 
 
 def _failure_reason(info: TerminationInfo, job: JobStatus, fallback: str) -> str:

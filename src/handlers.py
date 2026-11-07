@@ -57,13 +57,19 @@ def check_schedules(
     meta: kopf.Meta,
     **kwargs: Any,
 ) -> None:
-    """Periodically re-reconcile so newly created PVCs are picked up."""
+    """Periodically re-reconcile so newly created PVCs are picked up.
+
+    Also re-syncs status from the newest Job per PVC: Job watch events can be
+    missed (operator restart, watch interruption), and without this the CRD would
+    keep a stale entry until the next Job event.
+    """
     reconcile.schedule(
         name=name,
         namespace=namespace or "",
         spec=dict(spec),
         uid=meta.get("uid", ""),
     )
+    status_mod.resync_schedule(name, namespace or "")
 
 
 # Restore (one-shot: a Restore is immutable once its Job is created)
