@@ -31,7 +31,7 @@ spec:
             - sh
           args:
             - -c
-            - while :; do echo creating a file; dd if=/dev/random of=/data/$(date +%Y%m%d.%H%M) bs=1000 count=100000; sleep 60; done
+            - while :; do echo creating a file; dd if=/dev/random of=/data/$(date +%Y%m%d.%H%M) bs=1000 count=1000; sleep 4000; done
           ports:
             - containerPort: 80
           volumeMounts:
@@ -45,8 +45,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: sdfsdfdsf
-  namespace: testing
+  name: python-notes-app
+  namespace: production
   labels:
     app: python-notes-app
 spec:
@@ -55,28 +55,30 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 2Gi
+      storage: 4Gi
 ---
+
 apiVersion: v1
+data:
+  AWS_ACCESS_KEY_ID: R0sxYmY1Mjc1ZTJmMTRlNzZkZThkN2E0NDk=
+  AWS_SECRET_ACCESS_KEY: YTNmZGM5YmZjYzVlNWJkOTczNzZlN2Y0MzI5MDI1ZWY2NjRjYWM2YTY1ZmE3ZWEwMmE3Y2M0NDk3OWZmNDkwMQ==
+  RESTIC_PASSWORD: YjFRRXc3MHFIY3lHR3JQbHRFNGZ5U2lZRmxvdEVZVGJJZTF3NzJsdUVXUFV6MklCWnZRT3pWMTdlWmFsd20wMg==
 kind: Secret
 metadata:
   name: restic-s3-secret
   namespace: production
-type: Opaque
-stringData:
-  RESTIC_PASSWORD: "changeme-restic-password"
-  AWS_ACCESS_KEY_ID: "changeme-access-key-id"
-  AWS_SECRET_ACCESS_KEY: "changeme-secret-access-key"
 ---
 apiVersion: secchio.cocointhe.cloud/v1alpha1
 kind: BackupSchedule
 metadata:
   name: python-notes
+  namespace: production
 spec:
   pvc:
     selector:
       app: python-notes-app
   schedule: "*/10 * * * *"
+  timeZone: 'Europe/Paris'
   repo:
     endpoint: 192.168.1.20/backups
     secretName: restic-s3-secret
@@ -89,7 +91,7 @@ spec:
 # kind: PersistentVolumeClaim
 # metadata:
 #   name: python-notes-app-restore-data
-#   namespace: backup-test
+#   namespace: production
 # spec:
 #   accessModes:
 #     - ReadWriteOnce
@@ -102,9 +104,205 @@ spec:
 # kind: Restore
 # metadata:
 #   name: python-notes-app-restore
-#   namespace: backup-test
+#   namespace: production
 # spec:
-#   backupRef: python-notes-app-backup-backup-python-notes-app-data
-#   targetPVC: python-notes-app-data
-#   targetPVCNamespace: backup-test
+#   scheduleName: python-notes
+#   pvcName: python-notes-app
+#   targetPVC: python-notes-app-restore-data
 #   snapshotID: b8ce225e
+
+
+---
+
+# Test manifests for secchio
+# Creates a pod, PVC (longhorn), BackupSchedule, and mock S3 secret
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: second-app
+  namespace: production
+  labels:
+    app: second-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: second-app
+  template:
+    metadata:
+      labels:
+        app: second-app
+    spec:
+      containers:
+        - name: second-app
+          image: alpine
+          command:
+            - sh
+          args:
+            - -c
+            - while :; do echo creating a file; dd if=/dev/random of=/data/$(date +%Y%m%d.%H%M) bs=1000 count=1000; sleep 4000; done
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: second-app
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: second-app
+  namespace: production
+  labels:
+    app: second-app
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 4Gi
+
+---
+apiVersion: secchio.cocointhe.cloud/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: second-app
+  namespace: production
+spec:
+  pvc:
+    selector:
+      app: second-app
+  schedule: "*/10 * * * *"
+  timeZone: 'Europe/Paris'
+  repo:
+    endpoint: 192.168.1.20/backups
+    secretName: restic-s3-secret
+    insecureTLS: true
+  retention:
+    keepDaily: 1
+---
+
+
+
+
+
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc1
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: secchio.cocointhe.cloud/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: full-backup
+  namespace: production
+spec:
+  pvc:
+    selector:
+      backup: "yes"
+  schedule: "25 * * * *"
+  timeZone: 'Europe/Paris'
+  repo:
+    endpoint: 192.168.1.20/backups
+    secretName: restic-s3-secret
+    insecureTLS: true
+  retention:
+    keepDaily: 1
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc2
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc3
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc4
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc5
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc6
+  namespace: production
+  labels:
+    backup: "yes"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi

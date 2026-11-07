@@ -115,10 +115,33 @@ Have a look at tests/test-manifests.yaml for a full example.
 
 ### Local development with Tilt
 
+Requirements:
+- a kube cluster (you might need to change the allowed context name in `Tiltfile`)
+- docker and buildx installed
+
+First create a docker buildx context named `kube` for remote builds:
 ```bash
-tilt up --stream
+docker buildx create --name=kube --driver=kubernetes --use \
+              --driver-opt=namespace=buildkit,rootless=true 
 ```
+
+then 
+```bash
+tilt up --port 10350
+```
+Tilt UI for checking builds etc will be on http://localhost:10350
+
 The secchio UI will be available on http://localhost:8002
+
+### Running tests
+
+The Dockerfile has a `tests` target that runs the full verification suite (lint, typecheck, pyright, shellcheck, pytest) inside the build image:
+
+```bash
+docker buildx build -t secchio-tests --target tests .
+```
+
+This is the same target CI uses. For faster iteration, run the individual stages locally with `make -f tests/Makefile verify` (or `lint`, `typecheck`, `test`, etc.).
 
 ## Uninstall
 

@@ -1,5 +1,9 @@
 # Verification entrypoint for secchio.
 #
+# The canonical way to run the full suite is the Dockerfile's `tests` target:
+#   docker buildx build -t secchio-tests --target tests .
+# The targets below are for faster local iteration.
+#
 #   make verify     run every check (do this before handing work back)
 #   make lint       ruff lint + format check
 #   make typecheck  mypy
