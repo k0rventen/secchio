@@ -153,6 +153,141 @@ def test_sync_backup_entry_patches_schedule() -> None:
     assert result.backups[0].cronjob_name == "sched-backup-data-cronjob"
 
 
+def test_patch_schedule_entry_preserves_snapshots_when_job_reports_none() -> None:
+    schedule_item = {
+        "metadata": {"name": "sched", "namespace": "ns"},
+        "spec": {},
+        "status": {
+            "backups": [
+                {
+                    "pvcName": "data",
+                    "cronjobName": "sched-backup-data-cronjob",
+                    "phase": "Completed",
+                    "lastBackupTime": "2026-01-01T00:00:00Z",
+                    "snapshots": [{"id": "abc", "time": "2026-01-01T00:00:00Z", "size": 10}],
+                }
+            ]
+        },
+    }
+    entry = BackupEntry(
+        pvc_name="data",
+        cronjob_name="sched-backup-data-cronjob",
+        phase=Phase.RUNNING,
+        last_backup_time="2026-01-02T00:00:00Z",
+    )
+
+    with (
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=schedule_item),
+        mock.patch.object(status.k8s, "patch_status") as patch_status,
+    ):
+        status._patch_schedule_entry("sched", "ns", entry)
+
+    result = patch_status.call_args.kwargs["status"]
+    assert [snapshot.id for snapshot in result.backups[0].snapshots] == ["abc"]
+
+
+def test_patch_schedule_entry_skips_unchanged_status() -> None:
+    entry = BackupEntry(
+        pvc_name="data",
+        cronjob_name="sched-backup-data-cronjob",
+        phase=Phase.COMPLETED,
+        last_backup_time="2026-01-01T00:00:00Z",
+        snapshots=[SnapshotInfo(id="abc", time="2026-01-01T00:00:00Z", size=10)],
+    )
+    current = status.aggregate_schedule_status([entry]).model_dump(by_alias=True, mode="json")
+    schedule_item = {
+        "metadata": {"name": "sched", "namespace": "ns"},
+        "spec": {},
+        "status": current,
+    }
+
+    with (
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=schedule_item),
+        mock.patch.object(status.k8s, "patch_status") as patch_status,
+    ):
+        status._patch_schedule_entry("sched", "ns", entry)
+
+    patch_status.assert_not_called()
+
+
+def test_sync_backup_entry_keeps_snapshots_when_termination_log_is_empty() -> None:
+    schedule_item = {
+        "metadata": {"name": "sched", "namespace": "ns"},
+        "spec": {},
+        "status": {
+            "backups": [
+                {
+                    "pvcName": "data",
+                    "cronjobName": "sched-backup-data-cronjob",
+                    "phase": "Completed",
+                    "lastBackupTime": "2026-01-01T00:00:00Z",
+                    "snapshots": [{"id": "abc", "time": "2026-01-01T00:00:00Z", "size": 10}],
+                }
+            ]
+        },
+    }
+    batch = mock.Mock()
+    batch.list_namespaced_job.return_value = mock.Mock(
+        items=[mock.Mock(metadata=mock.Mock(creation_timestamp=None))]
+    )
+
+    with (
+        mock.patch.object(status.k8s, "get_batch_api", return_value=batch),
+        mock.patch.object(
+            status.JobStatus,
+            "from_job",
+            return_value=JobStatus(
+                name="j",
+                namespace="ns",
+                succeeded=1,
+                completion_time="2026-01-02T00:00:00Z",
+            ),
+        ),
+        mock.patch.object(status, "extract_termination_info", return_value=TerminationInfo()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=schedule_item),
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "patch_status") as patch_status,
+    ):
+        status.sync_backup_entry("sched", "ns", "data")
+
+    result = patch_status.call_args.kwargs["status"]
+    assert result.backups[0].phase == Phase.COMPLETED
+    assert [snapshot.id for snapshot in result.backups[0].snapshots] == ["abc"]
+
+
+def test_resync_schedule_syncs_each_entry() -> None:
+    schedule_item = {
+        "metadata": {"name": "sched", "namespace": "ns"},
+        "spec": {},
+        "status": {"backups": [{"pvcName": "data"}, {"pvcName": "logs"}]},
+    }
+
+    with (
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=schedule_item),
+        mock.patch.object(status, "sync_backup_entry") as sync,
+    ):
+        status.resync_schedule("sched", "ns")
+
+    assert [call.args for call in sync.call_args_list] == [
+        ("sched", "ns", "data"),
+        ("sched", "ns", "logs"),
+    ]
+
+
+def test_resync_schedule_ignores_missing_schedule() -> None:
+    with (
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=None),
+        mock.patch.object(status, "sync_backup_entry") as sync,
+    ):
+        status.resync_schedule("sched", "ns")
+
+    sync.assert_not_called()
+
+
 def test_sync_backup_entry_adds_missing_entry() -> None:
     schedule_item = {
         "metadata": {"name": "sched", "namespace": "ns"},
