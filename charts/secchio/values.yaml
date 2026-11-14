@@ -2,7 +2,7 @@
 
 operator:
   image: ghcr.io/k0rventen/secchio-operator
-  tag: v0.10.1
+  tag: v0.10.1@sha256:997c23220fdd2a67ca6605ff3998f0a93c48896c962974a696876fa3bb58f144
   resources:
     requests:
       cpu: 50m
@@ -12,4 +12,4 @@ operator:
       memory: 200Mi
 restic:
   image: ghcr.io/k0rventen/secchio-restic
-  tag: v0.10.1
+  tag: v0.10.1@sha256:9307a258bac36a1246881cd21f1c0c7e062443cd7425ead1e5a238a548a40914
