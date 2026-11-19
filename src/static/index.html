@@ -88,18 +88,19 @@
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
+            gap: 12px;
+            margin-bottom: 20px;
         }
 
         .stat-card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 16px;
+            padding: 12px 16px;
         }
         .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; }
         .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+        .stat-sep { color: var(--text-faint); font-weight: 500; margin: 0 4px; }
 
         /* Navigation Tabs */
         .tabs {
@@ -462,9 +463,9 @@
                 </div>
             </div>
             <div class="header-actions">
-                <div class="live-indicator" role="status" aria-label="Data auto-refreshes every 30 seconds">
+                <div class="live-indicator" role="status" aria-label="Data auto-refreshes: every 5 seconds while backups run, every 30 seconds when idle">
                     <span class="live-dot"></span>
-                    <span class="live-tooltip">Data auto-refreshes every 30 seconds</span>
+                    <span class="live-tooltip">Auto-refresh: 5s while running, 30s when idle</span>
                 </div>
             </div>
         </header>
@@ -472,16 +473,16 @@
         <!-- Stats Overview -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Backup Schedules</div>
-                <div class="stat-value" id="stat-schedules">-</div>
+                <div class="stat-label">Schedules / Backups</div>
+                <div class="stat-value">
+                    <span id="stat-schedules">-</span><span class="stat-sep">/</span><span id="stat-backups">-</span>
+                </div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Total Backups</div>
-                <div class="stat-value" id="stat-backups">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Healthy Backups</div>
-                <div class="stat-value" id="stat-healthy" style="color: var(--success);">-</div>
+                <div class="stat-label">Running / Healthy / Failed</div>
+                <div class="stat-value">
+                    <span id="stat-running" style="color: var(--info);">-</span><span class="stat-sep">/</span><span id="stat-healthy" style="color: var(--success);">-</span><span class="stat-sep">/</span><span id="stat-failed" style="color: var(--danger);">-</span>
+                </div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Recent Restores</div>
@@ -610,6 +611,13 @@
     <script>
         const expandedSchedules = new Set();
 
+        // Poll faster while a backup/restore is in flight, and back off when idle.
+        // The operator writes status from Job events (immediately) and from a 60s
+        // resync timer, so there is no point polling faster than that when idle.
+        const POLL_INTERVAL_ACTIVE_MS = 5000;
+        const POLL_INTERVAL_IDLE_MS = 30000;
+        let pollTimer = null;
+
         function switchTab(tab) {
             document.getElementById('tab-schedules').style.display = tab === 'schedules' ? 'block' : 'none';
             document.getElementById('tab-restores').style.display = tab === 'restores' ? 'block' : 'none';
@@ -689,25 +697,44 @@
                 renderOverview(schedules, restores);
                 renderSchedules(schedules);
                 renderRestores(restores);
+                scheduleNextPoll(hasActiveWork(schedules, restores));
             } catch (err) {
                 console.error('Failed to load data:', err);
                 showToast('Failed to refresh data from server', 'error');
+                scheduleNextPoll(false);
             }
+        }
+
+        function hasActiveWork(schedules, restores) {
+            const backupRunning = schedules.some(s => (s.status?.summary?.runningBackups || 0) > 0);
+            const restoreRunning = restores.some(r => r.phase === 'Running' || r.phase === 'Pending');
+            return backupRunning || restoreRunning;
+        }
+
+        function scheduleNextPoll(active) {
+            clearTimeout(pollTimer);
+            pollTimer = setTimeout(loadAllData, active ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS);
         }
 
         function renderOverview(schedules, restores) {
             let totalBackups = 0;
             let healthyBackups = 0;
+            let runningBackups = 0;
+            let failedBackups = 0;
 
             schedules.forEach(s => {
                 const summary = s.status?.summary || {};
-                totalBackups += (s.backups?.length || summary.totalBackups || 0);
+                totalBackups += (s.backups?.length ?? summary.totalBackups ?? 0);
                 healthyBackups += (summary.healthyBackups || 0);
+                runningBackups += (summary.runningBackups || 0);
+                failedBackups += (summary.failedBackups || 0);
             });
 
             document.getElementById('stat-schedules').textContent = schedules.length;
             document.getElementById('stat-backups').textContent = totalBackups;
             document.getElementById('stat-healthy').textContent = healthyBackups;
+            document.getElementById('stat-running').textContent = runningBackups;
+            document.getElementById('stat-failed').textContent = failedBackups;
             document.getElementById('stat-restores').textContent = restores.length;
         }
 
@@ -1067,7 +1094,6 @@
         // Initial Load & Auto-refresh Polling
         loadVersion();
         loadAllData();
-        setInterval(loadAllData, 30000);
     </script>
 </body>
 </html>

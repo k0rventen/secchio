@@ -33,7 +33,7 @@ The chart is published as an OCI artifact on GHCR:
 ```sh
 helm install secchio-operator oci://ghcr.io/k0rventen/secchio \
   --create-namespace --namespace secchio-system \
-  --version 0.10.1
+  --version 0.10.2
 ```
 
 The CRDs are bundled in `crds/` and are installed automatically on the first install.

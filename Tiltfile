@@ -1,5 +1,5 @@
 # vcluster test cluster
-allow_k8s_contexts('vcluster_vcluster_vcluster_mora')
+allow_k8s_contexts('coco:vcluster')
 
 # set the images to the local registry and latest restic image for automatic always pullpolicy
 k8s_yaml(local('helm template --include-crds charts/secchio/ -n secchio-system --set operator.image=gitea.cocointhe.cloud/coco/secchio-operator --set restic.image=gitea.cocointhe.cloud/coco/secchio-restic --set=restic.tag=latest'))

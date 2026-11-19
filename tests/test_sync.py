@@ -72,6 +72,93 @@ def test_extract_termination_info_surfaces_pod_condition() -> None:
     assert "Multi-Attach" in info.error
 
 
+def _pod_with_container_state(state: mock.Mock) -> mock.Mock:
+    pod = mock.Mock()
+    pod.metadata.creation_timestamp = None
+    pod.status.container_statuses = [mock.Mock(state=state)]
+    return pod
+
+
+def test_extract_pod_blocker_surfaces_terminal_waiting_reason() -> None:
+    pod = _pod_with_container_state(
+        mock.Mock(
+            waiting=mock.Mock(
+                reason="CreateContainerConfigError",
+                message='secret "creds" not found',
+            )
+        )
+    )
+    core = mock.Mock()
+    core.list_namespaced_pod.return_value = mock.Mock(items=[pod])
+
+    with mock.patch.object(restic, "get_core_api", return_value=core):
+        info = restic.extract_pod_blocker("job", "ns")
+
+    assert info.waiting_reason == "CreateContainerConfigError"
+    assert "creds" in info.waiting_message
+
+
+def test_extract_pod_blocker_ignores_transient_waiting_reason() -> None:
+    pod = _pod_with_container_state(
+        mock.Mock(waiting=mock.Mock(reason="ContainerCreating", message=""))
+    )
+    core = mock.Mock()
+    core.list_namespaced_pod.return_value = mock.Mock(items=[pod])
+
+    with mock.patch.object(restic, "get_core_api", return_value=core):
+        info = restic.extract_pod_blocker("job", "ns")
+
+    assert info == TerminationInfo()
+
+
+def test_extract_pod_blocker_ignores_running_container() -> None:
+    pod = _pod_with_container_state(mock.Mock(waiting=None, running=mock.Mock()))
+    core = mock.Mock()
+    core.list_namespaced_pod.return_value = mock.Mock(items=[pod])
+
+    with mock.patch.object(restic, "get_core_api", return_value=core):
+        info = restic.extract_pod_blocker("job", "ns")
+
+    assert info == TerminationInfo()
+
+
+def test_extract_pod_blocker_surfaces_unschedulable_pod() -> None:
+    pod = mock.Mock()
+    pod.metadata.creation_timestamp = None
+    pod.status.container_statuses = None
+    pod.status.conditions = [
+        mock.Mock(type="PodScheduled", status="False", message="0/1 nodes are available")
+    ]
+    core = mock.Mock()
+    core.list_namespaced_pod.return_value = mock.Mock(items=[pod])
+
+    with mock.patch.object(restic, "get_core_api", return_value=core):
+        info = restic.extract_pod_blocker("job", "ns")
+
+    assert "0/1 nodes" in info.error
+
+
+def test_extract_pod_blocker_ignores_starting_pod_conditions() -> None:
+    pod = mock.Mock()
+    pod.metadata.creation_timestamp = None
+    pod.status.container_statuses = None
+    pod.status.conditions = [
+        mock.Mock(type="PodScheduled", status="True", message=""),
+        mock.Mock(
+            type="ContainersReady",
+            status="False",
+            message="containers with unready status: [restic-backup]",
+        ),
+    ]
+    core = mock.Mock()
+    core.list_namespaced_pod.return_value = mock.Mock(items=[pod])
+
+    with mock.patch.object(restic, "get_core_api", return_value=core):
+        info = restic.extract_pod_blocker("job", "ns")
+
+    assert info == TerminationInfo()
+
+
 def test_failed_reason_from_kopf_dicts() -> None:
     conditions = [
         {"type": "Complete", "status": "True", "message": "done"},

@@ -18,7 +18,7 @@ RUN uv sync --no-dev --locked --no-install-project
 
 # tests stage
 FROM uv AS tests
-RUN apk add make libstdc++ shellcheck
+RUN apk add make libstdc++ shellcheck scc
 
 # install all deps for testing
 WORKDIR /tests
