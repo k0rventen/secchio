@@ -69,7 +69,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       -
         name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       -
         name: Build and push operator
         id: build-operator
@@ -145,7 +145,7 @@ jobs:
     steps:
       - name: generate changelog
         id: changelog
-        uses: requarks/changelog-action@b78a3354a01f4a1affb484b9264b506a815c46b1 # v1.10.3
+        uses: requarks/changelog-action@7ce6be4c4d2233ae2a943694ca34f23aeafa1054 # v1.11.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
