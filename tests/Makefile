@@ -20,9 +20,9 @@ SRC := src
 TESTS := tests
 RESTIC_POD := restic-pod
 
-.PHONY: verify lint typecheck pyright shellcheck test format
+.PHONY: verify lint typecheck pyright shellcheck test format scc
 
-verify: lint typecheck pyright shellcheck test
+verify: lint typecheck pyright shellcheck test scc
 
 lint:
 	$(UV) run ruff check $(SRC) $(TESTS)
@@ -45,4 +45,4 @@ test:
 	$(UV) run pytest -q
 
 lines:
-    scc -c --no-cocomo $(SRC)
+	scc -c --no-cocomo $(SRC)
