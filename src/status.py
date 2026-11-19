@@ -39,7 +39,7 @@ from crds import (
     RestoreStatus,
     SchedulePhase,
 )
-from restic import TerminationInfo, extract_termination_info
+from restic import TerminationInfo, extract_pod_blocker, extract_termination_info
 
 logger = logging.getLogger("status")
 
@@ -200,6 +200,16 @@ def _entry_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> Backup
         entry.message = f"Backup failed: {_failure_reason(info, job, 'Backup job failed')}"
         entry.reason = info.waiting_reason
     elif job.active:
+        # A Job whose pod cannot start (e.g. CreateContainerConfigError for a
+        # missing Secret) stays active forever, so the Job status alone looks like
+        # a running backup. Surface the pod's blocking state instead.
+        blocker = extract_pod_blocker(job.name, job.namespace)
+        if blocker.waiting_reason or blocker.error:
+            entry.phase = Phase.FAILED
+            entry.last_backup_time = job.start_time or now_iso()
+            entry.message = f"Backup failed: {_failure_reason(blocker, job, 'Pod failed to start')}"
+            entry.reason = blocker.waiting_reason or "PodFailed"
+            return entry
         entry.phase = Phase.RUNNING
         entry.last_backup_time = job.start_time
         entry.message = f"Backup job {job.name} is running"
@@ -282,12 +292,21 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
             message=f"Restore failed: {reason}",
         )
     elif job.active:
-        status = RestoreStatus(
-            phase=Phase.RUNNING,
-            start_time=job.start_time or now_iso(),
-            snapshot_id=snapshot,
-            message=f"Restore job {job.name} is running",
-        )
+        blocker = extract_pod_blocker(job.name, job.namespace)
+        if blocker.waiting_reason or blocker.error:
+            status = RestoreStatus(
+                phase=Phase.FAILED,
+                completion_time=now_iso(),
+                snapshot_id=snapshot,
+                message=f"Restore failed: {_failure_reason(blocker, job, 'Pod failed to start')}",
+            )
+        else:
+            status = RestoreStatus(
+                phase=Phase.RUNNING,
+                start_time=job.start_time or now_iso(),
+                snapshot_id=snapshot,
+                message=f"Restore job {job.name} is running",
+            )
     else:
         return
 

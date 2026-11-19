@@ -127,6 +127,23 @@ class TerminationInfo:
     waiting_message: str = ""
 
 
+# Container waiting reasons that mean the pod cannot start without a change to its
+# configuration (missing Secret/ConfigMap, bad image reference, ...). Transient
+# reasons such as ``ContainerCreating`` and ``PodInitializing`` are deliberately
+# excluded so a pod that is still starting is not reported as failed.
+TERMINAL_WAITING_REASONS = frozenset(
+    {
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+        "InvalidImageName",
+        "ErrImagePull",
+        "ImagePullBackOff",
+        "CrashLoopBackOff",
+    }
+)
+
+
 def _pod_creation_time(pod: V1Pod) -> float:
     """Sort key for picking the newest pod; missing timestamps sort first."""
     meta = pod.metadata
@@ -143,6 +160,33 @@ def _pod_condition_message(pod_status: V1PodStatus) -> str:
     return ""
 
 
+def _pod_scheduling_error(pod_status: V1PodStatus) -> str:
+    """The message of a ``PodScheduled=False`` condition, if the pod is unschedulable.
+
+    Other conditions (``Initialized``, ``ContainersReady``, ``Ready``) are ``False``
+    while a pod is starting normally, so they are not treated as failures.
+    """
+    for condition in pod_status.conditions or []:
+        if condition.type == "PodScheduled" and condition.status == "False":
+            return condition.message or condition.reason or ""
+    return ""
+
+
+def _latest_pod_status(job_name: str, namespace: str) -> V1PodStatus | None:
+    """Status of the newest pod for a Job, or ``None`` when there is none."""
+    try:
+        pods = get_core_api().list_namespaced_pod(
+            namespace=namespace,
+            label_selector=f"job-name={job_name}",
+        )
+    except (ApiException, OpenApiException, ValueError, OSError) as e:
+        logger.warning("Failed to list pods for job %s: %s", job_name, e)
+        return None
+    if not pods.items:
+        return None
+    return max(pods.items, key=_pod_creation_time).status
+
+
 def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     """Read the last pod's outcome for a Job.
 
@@ -152,52 +196,67 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     never started, the waiting state (e.g. ``CreateContainerConfigError``) or a
     failing pod condition is surfaced instead.
     """
-    core_api = get_core_api()
-    try:
-        pods = core_api.list_namespaced_pod(
-            namespace=namespace,
-            label_selector=f"job-name={job_name}",
-        )
-        if not pods.items:
-            return TerminationInfo()
-
-        pod_status = max(pods.items, key=_pod_creation_time).status
-        if pod_status is None:
-            return TerminationInfo()
-
-        statuses = pod_status.container_statuses
-        if not statuses:
-            # The pod never started (e.g. unschedulable); surface its condition.
-            return TerminationInfo(error=_pod_condition_message(pod_status))
-
-        container_status = statuses[-1]
-        state = container_status.state
-        if state and state.waiting:
-            # The container never started (e.g. CreateContainerConfigError for a
-            # missing Secret). There is no termination log to parse.
-            return TerminationInfo(
-                waiting_reason=state.waiting.reason or "",
-                waiting_message=state.waiting.message or "",
-            )
-
-        term_state = state.terminated if state else None
-        if not term_state:
-            return TerminationInfo()
-
-        message = term_state.message or ""
-        info = parse_termination_message(message)
-        if not info.snapshot_id and not info.snapshots and term_state.exit_code == 0:
-            match = re.search(r"snapshot\s+([a-fA-F0-9]{8,})\s+saved", message)
-            if match:
-                info.snapshot_id = match.group(1)
-        if info.snapshot_id and all(s.id != info.snapshot_id for s in info.snapshots):
-            info.snapshots.insert(0, SnapshotInfo(id=info.snapshot_id))
-        if term_state.exit_code != 0:
-            info.error = message or f"Container exited with code {term_state.exit_code}"
-        return info
-    except (ApiException, OpenApiException, ValueError, OSError) as e:
-        logger.warning("Failed to inspect termination log for job %s: %s", job_name, e)
+    pod_status = _latest_pod_status(job_name, namespace)
+    if pod_status is None:
         return TerminationInfo()
+
+    statuses = pod_status.container_statuses
+    if not statuses:
+        # The pod never started (e.g. unschedulable); surface its condition.
+        return TerminationInfo(error=_pod_condition_message(pod_status))
+
+    container_status = statuses[-1]
+    state = container_status.state
+    if state and state.waiting:
+        # The container never started (e.g. CreateContainerConfigError for a
+        # missing Secret). There is no termination log to parse.
+        return TerminationInfo(
+            waiting_reason=state.waiting.reason or "",
+            waiting_message=state.waiting.message or "",
+        )
+
+    term_state = state.terminated if state else None
+    if not term_state:
+        return TerminationInfo()
+
+    message = term_state.message or ""
+    info = parse_termination_message(message)
+    if not info.snapshot_id and not info.snapshots and term_state.exit_code == 0:
+        match = re.search(r"snapshot\s+([a-fA-F0-9]{8,})\s+saved", message)
+        if match:
+            info.snapshot_id = match.group(1)
+    if info.snapshot_id and all(s.id != info.snapshot_id for s in info.snapshots):
+        info.snapshots.insert(0, SnapshotInfo(id=info.snapshot_id))
+    if term_state.exit_code != 0:
+        info.error = message or f"Container exited with code {term_state.exit_code}"
+    return info
+
+
+def extract_pod_blocker(job_name: str, namespace: str) -> TerminationInfo:
+    """Inspect a Job's pod for a state that blocks the Job from making progress.
+
+    A Job whose pod cannot start (for example ``CreateContainerConfigError`` when
+    the credentials Secret is missing) stays ``active`` indefinitely, so the Job
+    status alone looks like a running backup. This reports the pod's blocking
+    waiting state or unschedulable condition instead. It returns an empty
+    ``TerminationInfo`` while the pod is running or still starting, and ignores a
+    container that has terminated (the Job controller handles retries).
+    """
+    pod_status = _latest_pod_status(job_name, namespace)
+    if pod_status is None:
+        return TerminationInfo()
+
+    statuses = pod_status.container_statuses
+    if not statuses:
+        return TerminationInfo(error=_pod_scheduling_error(pod_status))
+
+    state = statuses[-1].state
+    if state and state.waiting and state.waiting.reason in TERMINAL_WAITING_REASONS:
+        return TerminationInfo(
+            waiting_reason=state.waiting.reason or "",
+            waiting_message=state.waiting.message or "",
+        )
+    return TerminationInfo()
 
 
 def parse_termination_message(message: str) -> TerminationInfo:
