@@ -43,3 +43,6 @@ shellcheck:
 
 test:
 	$(UV) run pytest -q
+
+lines:
+    scc -c --no-cocomo $(SRC)

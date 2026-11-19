@@ -104,6 +104,62 @@ def test_backup_entry_from_pending_job_is_none() -> None:
     assert status._entry_from_job(JobStatus(name="j", namespace="ns"), "sched", "data") is None
 
 
+def test_backup_entry_from_active_job_with_blocked_pod_is_failed() -> None:
+    job = JobStatus(
+        name="j",
+        namespace="ns",
+        labels={LABEL_SCHEDULE: "sched", LABEL_PVC_NAME: "data"},
+        active=1,
+        start_time="2026-01-01T00:00:00Z",
+    )
+    blocker = TerminationInfo(
+        waiting_reason="CreateContainerConfigError",
+        waiting_message='secret "creds" not found',
+    )
+    with mock.patch.object(status, "extract_pod_blocker", return_value=blocker):
+        entry = status._entry_from_job(job, "sched", "data")
+
+    assert entry is not None
+    assert entry.phase == Phase.FAILED
+    assert entry.reason == "CreateContainerConfigError"
+    assert "creds" in entry.message
+
+
+def test_backup_entry_from_active_job_with_running_pod_is_running() -> None:
+    job = JobStatus(
+        name="j",
+        namespace="ns",
+        labels={LABEL_SCHEDULE: "sched", LABEL_PVC_NAME: "data"},
+        active=1,
+        start_time="2026-01-01T00:00:00Z",
+    )
+    with mock.patch.object(status, "extract_pod_blocker", return_value=TerminationInfo()):
+        entry = status._entry_from_job(job, "sched", "data")
+
+    assert entry is not None
+    assert entry.phase == Phase.RUNNING
+    assert entry.last_backup_time == "2026-01-01T00:00:00Z"
+
+
+def test_restore_active_job_with_blocked_pod_is_failed() -> None:
+    job = JobStatus(name="j", namespace="ns", labels={LABEL_RESTORE: "rt"}, active=1)
+    blocker = TerminationInfo(
+        waiting_reason="CreateContainerConfigError",
+        waiting_message='secret "creds" not found',
+    )
+    with (
+        mock.patch.object(status, "extract_termination_info", return_value=TerminationInfo()),
+        mock.patch.object(status, "extract_pod_blocker", return_value=blocker),
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "patch_status") as patch_status,
+    ):
+        status._sync_restore_from_job(job, "rt")
+
+    result = patch_status.call_args.kwargs["status"]
+    assert result.phase == Phase.FAILED
+    assert "creds" in result.message
+
+
 def test_restore_job_failure_updates_status() -> None:
     job = JobStatus(name="j", namespace="ns", labels={LABEL_RESTORE: "rt"}, failed=1)
     with (
