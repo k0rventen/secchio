@@ -22,6 +22,7 @@ LABEL_MANAGED_BY = "app.kubernetes.io/managed-by"
 LABEL_MANAGED_BY_VALUE = "secchio-operator"
 LABEL_SCHEDULE = "secchio.cocointhe.cloud/schedule"
 LABEL_RESTORE = "secchio.cocointhe.cloud/restore"
+LABEL_SCAN = "secchio.cocointhe.cloud/scan"
 LABEL_PVC_NAME = "secchio.cocointhe.cloud/pvc-name"
 
 # Status reasons
@@ -70,6 +71,16 @@ def make_restore_labels(restore_name: str, schedule_name: str, pvc_name: str) ->
         LABEL_RESTORE: restore_name,
         LABEL_SCHEDULE: schedule_name,
         LABEL_PVC_NAME: pvc_name,
+    }
+
+
+def make_scan_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
+    """Generate standard labels for a snapshot-scan Job."""
+    return {
+        **_base_labels(),
+        LABEL_SCHEDULE: schedule_name,
+        LABEL_PVC_NAME: pvc_name,
+        LABEL_SCAN: "true",
     }
 
 

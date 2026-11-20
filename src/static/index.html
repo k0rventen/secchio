@@ -84,6 +84,44 @@
         .btn-outline-danger { background: var(--surface); border-color: var(--danger); color: var(--danger); }
         .btn-outline-danger:hover { background: var(--danger-bg); }
 
+        /* Overflow action menu */
+        .menu { position: relative; display: inline-flex; }
+        .menu-items {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: calc(100% + 6px);
+            min-width: 200px;
+            padding: 4px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            z-index: 20;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .menu.open .menu-items { display: flex; }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 8px 10px;
+            background: none;
+            border: none;
+            border-radius: 6px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+        }
+        .menu-item:hover { background: var(--surface-hover); }
+        .menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+        .menu-item.danger { color: var(--danger); }
+
         /* Stats Bar */
         .stats-grid {
             display: grid;
@@ -535,6 +573,9 @@
                             </div>
                         </div>
                     </div>
+                    <div class="alert-box" style="margin-top: 16px;">
+                        <strong>Warning:</strong> Scale down or stop the workload using this PVC before restoring. Restoring into a PVC that is in use can corrupt the running application.
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
@@ -587,11 +628,31 @@
             </div>
             <div class="confirm-body">
                 <p>Suspend all backups for <strong id="confirm-dr-name"></strong> and restore the latest snapshot of all <strong id="confirm-dr-count"></strong> PVCs <strong>in place</strong>?</p>
-                <p style="margin-top: 10px; color: var(--danger); font-size: 0.85rem;">Existing data in the PVCs will be overwritten.</p>
+                <div class="alert-box" style="margin-top: 12px; text-align: left;">
+                    <strong>Warning:</strong> Existing data in the PVCs will be overwritten. Scale down or stop the workloads using these PVCs first — restoring into a PVC that is in use can corrupt the running application.
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeDisasterRecoveryModal()">Cancel</button>
                 <button type="button" class="btn btn-outline-danger" id="btn-confirm-disaster-recovery" onclick="confirmDisasterRecovery()">Yes, Recover</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Scan Modal -->
+    <div class="modal-overlay" id="confirm-scan-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Scan Repository</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeScanModal()">✕</button>
+            </div>
+            <div class="confirm-body">
+                <p>Create a scan Job for all <strong id="confirm-scan-count"></strong> PVCs under <strong id="confirm-scan-name"></strong>?</p>
+                <p style="margin-top: 10px; color: var(--warning); font-size: 0.85rem;">Scans run asynchronously. Snapshots appear once the Jobs complete — check the Jobs/pods if nothing updates.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeScanModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-scan" onclick="confirmScan()">Yes, Scan</button>
             </div>
         </div>
     </div>
@@ -630,6 +691,24 @@
             document.getElementById('tab-btn-restores').classList.toggle('active', tab === 'restores');
             loadAllData();
         }
+
+        function toggleMenu(btn) {
+            const menu = btn.closest('.menu');
+            const open = menu.classList.toggle('open');
+            btn.setAttribute('aria-expanded', String(open));
+        }
+
+        function closeMenus() {
+            document.querySelectorAll('.menu.open').forEach(menu => {
+                menu.classList.remove('open');
+                const btn = menu.querySelector('[aria-haspopup]');
+                if (btn) btn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest('.menu')) closeMenus();
+        });
 
         function toggleScheduleBackups(btn) {
             const name = btn.dataset.schedule;
@@ -806,10 +885,16 @@
                             <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${allOk}</span>
                         </div>
                         <div class="header-actions">
-                            ${s.suspend
-                                ? `<button class="btn btn-primary btn-sm" onclick="resumeSchedule(${jsArg(s.namespace)}, ${jsArg(s.name)})">▶ Resume Backups</button>`
-                                : `<button class="btn btn-secondary btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openScheduleBackupConfirmModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">▶ Trigger All</button>`}
-                            <button class="btn btn-outline-danger btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openDisasterRecoveryModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">⚠ Disaster Recovery</button>
+                            <div class="menu">
+                                <button class="btn btn-secondary btn-sm" onclick="toggleMenu(this)" aria-haspopup="true" aria-expanded="false" title="Actions">⋯</button>
+                                <div class="menu-items">
+                                    ${s.suspend
+                                        ? `<button class="menu-item" onclick="closeMenus(); resumeSchedule(${jsArg(s.namespace)}, ${jsArg(s.name)})">▶ Resume Backups</button>`
+                                        : `<button class="menu-item" ${backupCount === 0 ? 'disabled' : ''} onclick="closeMenus(); openScheduleBackupConfirmModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">▶ Trigger All</button>`}
+                                    <button class="menu-item" ${backupCount === 0 ? 'disabled' : ''} onclick="closeMenus(); openScanModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">↻ Scan repo</button>
+                                    <button class="menu-item danger" ${backupCount === 0 ? 'disabled' : ''} onclick="closeMenus(); openDisasterRecoveryModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">⚠ Disaster Recovery</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body">
@@ -822,7 +907,7 @@
 
                         <button class="collapse-toggle" data-schedule="${escapeHtml(scheduleKey)}" onclick="toggleScheduleBackups(this)">
                             <span class="chevron">${expanded ? '▾' : '▸'}</span>
-                            Target PVC Backups (${backupCount})
+                            Volumes (${backupCount})
                         </button>
                         <div class="backups-collapsible" style="display: ${expanded ? 'block' : 'none'};">
                             ${backupsHtml}
@@ -842,7 +927,7 @@
             <div class="backup-item">
                 <div class="backup-header">
                     <div class="backup-pvc-row">
-                        <span class="backup-pvc">${escapeHtml(schedule.namespace)} / ${escapeHtml(b.pvc_name)}</span>
+                        <span class="backup-pvc">${escapeHtml(b.pvc_name)}</span>
                         ${phaseBadge(phase)}
                     </div>
                     <button class="btn btn-secondary btn-sm" ${schedule.suspend ? 'disabled' : ''} onclick="openBackupConfirmModal(${jsArg(schedule.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.cronjob_name)})">▶ Trigger Backup</button>
@@ -1021,6 +1106,50 @@
                     showToast(data.message, 'success');
                 }
                 setTimeout(loadAllData, 2000);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        function openScanModal(namespace, scheduleName, count) {
+            const modal = document.getElementById('confirm-scan-modal');
+            document.getElementById('confirm-scan-name').textContent = `${namespace} / ${scheduleName}`;
+            document.getElementById('confirm-scan-count').textContent = count;
+            modal.dataset.scheduleNamespace = namespace;
+            modal.dataset.scheduleName = scheduleName;
+            modal.style.display = 'flex';
+        }
+
+        function closeScanModal() {
+            document.getElementById('confirm-scan-modal').style.display = 'none';
+        }
+
+        async function confirmScan() {
+            const modal = document.getElementById('confirm-scan-modal');
+            const btn = document.getElementById('btn-confirm-scan');
+            btn.disabled = true;
+            try {
+                await scanSchedule(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
+                closeScanModal();
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function scanSchedule(namespace, scheduleName) {
+            try {
+                showToast(`Creating snapshot scans for ${namespace}/${scheduleName}...`, 'info');
+                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/scan`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to start scan');
+                if (data.errors && data.errors.length > 0) {
+                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
+                } else {
+                    showToast(data.message, 'success');
+                }
+                setTimeout(loadAllData, 3000);
             } catch (err) {
                 showToast(err.message, 'error');
             }

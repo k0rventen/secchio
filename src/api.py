@@ -27,6 +27,8 @@ from common import (
     LABEL_RESTORE,
     LABEL_SCHEDULE,
     OPERATOR_VERSION,
+    RESTIC_IMAGE,
+    make_cronjob_name,
     make_restore_labels,
 )
 from crds import BackupSchedule, Restore, RestoreSpec
@@ -37,6 +39,7 @@ from k8s import (
     list_backup_schedules,
     list_cronjobs_for_schedule,
 )
+from workloads import WorkloadConfig, create_scan_job
 
 logger = logging.getLogger("api")
 
@@ -243,6 +246,69 @@ async def trigger_schedule(namespace: str, schedule_name: str) -> dict[str, Any]
         "status": "triggered",
         "message": f"Triggered {len(triggered)}/{len(schedule.status.backups)} backups "
         f"for '{schedule_name}'",
+        "triggered": triggered,
+        "errors": errors,
+    }
+
+
+def _create_scan_job(
+    namespace: str,
+    schedule_name: str,
+    pvc_name: str,
+    schedule: BackupSchedule,
+    uid: str,
+) -> str:
+    """Create a Job that lists a PVC's snapshots and return its name."""
+    job_name = f"{make_cronjob_name(schedule_name, pvc_name)[:40]}-scan-{int(time.time())}"
+    config = WorkloadConfig(
+        name=job_name,
+        namespace=namespace,
+        pvc_name=pvc_name,
+        repo=schedule.spec.repo,
+        secret_name=schedule.spec.repo.secret_name,
+        image=RESTIC_IMAGE,
+        mode="scan",
+        schedule_name=schedule_name,
+        owner_kind="BackupSchedule",
+        owner_name=schedule_name,
+        owner_uid=uid,
+    )
+    get_batch_api().create_namespaced_job(namespace=namespace, body=create_scan_job(config))
+    return job_name
+
+
+@app.post("/api/schedules/{namespace}/{schedule_name}/scan")
+async def scan_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
+    """Create a scan Job per PVC to refresh the schedule's snapshot list."""
+    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
+        )
+    schedule = BackupSchedule.from_crd(item)
+    if not schedule.status.backups:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
+        )
+
+    uid = str((item.get("metadata") or {}).get("uid", ""))
+    triggered: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for entry in schedule.status.backups:
+        try:
+            job_name = _create_scan_job(namespace, schedule_name, entry.pvc_name, schedule, uid)
+            triggered.append({"pvc": entry.pvc_name, "job_name": job_name})
+        except ApiException as e:
+            errors.append({"pvc": entry.pvc_name, "error": str(e)})
+
+    return {
+        "status": "triggered",
+        "message": (
+            f"Triggered {len(triggered)}/{len(schedule.status.backups)} snapshot scans "
+            f"for '{schedule_name}'"
+        ),
         "triggered": triggered,
         "errors": errors,
     }

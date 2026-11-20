@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: python-test-app
+  name: python-test-app2
+  namespace: testing
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: python-test-app
+  name: python-test-app3
+  namespace: testing
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: notes-app
+  name: python-test-app
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: longhorn
+---
+apiVersion: secchio.cocointhe.cloud/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: python-notes
+spec:
+  pvc:
+    selector:
+      app: notes-app
+  repo:
+    endpoint: 192.168.1.20/backups
+    insecureTLS: true
+    secretName: restic-s3-secret
+  retention:
+    keepDaily: 2
+  schedule: '30 23 * * *'
+  suspend: false
+  timeZone: Europe/Paris

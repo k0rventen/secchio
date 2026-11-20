@@ -27,6 +27,7 @@ from common import (
     JOB_TTL_SECONDS,
     make_cronjob_labels,
     make_restore_labels,
+    make_scan_labels,
 )
 from crds import RetentionConfig, S3BackendConfig
 from k8s import owner_reference
@@ -122,6 +123,39 @@ def create_cronjob(config: WorkloadConfig) -> V1CronJob:
                         spec=pod_spec,
                     ),
                 ),
+            ),
+        ),
+    )
+
+
+def create_scan_job(config: WorkloadConfig) -> V1Job:
+    """Build the one-off Job that lists a PVC's snapshots in the restic repo."""
+    labels = make_scan_labels(config.schedule_name, config.pvc_name)
+    env = build_restic_env(config.repo, config.secret_name, config.pvc_name, config.namespace)
+    env += entrypoint_env(config.mode, insecure_tls=config.repo.insecure_tls)
+    pod_spec = build_restic_pod(
+        container_name="restic-scan",
+        image=config.image,
+        env=env,
+        pvc_name=config.pvc_name,
+        read_only=True,
+        mount_pvc=False,
+    )
+    return V1Job(
+        api_version="batch/v1",
+        kind="Job",
+        metadata=V1ObjectMeta(
+            name=config.name,
+            namespace=config.namespace,
+            labels=labels,
+            owner_references=_owner(config),
+        ),
+        spec=V1JobSpec(
+            backoff_limit=1,
+            ttl_seconds_after_finished=JOB_TTL_SECONDS,
+            template=V1PodTemplateSpec(
+                metadata=V1ObjectMeta(labels=labels),
+                spec=pod_spec,
             ),
         ),
     )

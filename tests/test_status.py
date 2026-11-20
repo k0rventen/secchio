@@ -141,6 +141,37 @@ def test_backup_entry_from_active_job_with_running_pod_is_running() -> None:
     assert entry.last_backup_time == "2026-01-01T00:00:00Z"
 
 
+def test_scan_job_updates_snapshots_without_phase_change() -> None:
+    schedule_item = {
+        "metadata": {"name": "sched", "namespace": "ns"},
+        "spec": {},
+        "status": {
+            "backups": [
+                {
+                    "pvcName": "data",
+                    "cronjobName": "sched-backup-data-cronjob",
+                    "phase": "Completed",
+                    "lastBackupTime": "2026-01-01T00:00:00Z",
+                }
+            ]
+        },
+    }
+    job = JobStatus(name="scan", namespace="ns", succeeded=1)
+    info = TerminationInfo(snapshots=[SnapshotInfo(id="abc", time="t", size=1)])
+    with (
+        mock.patch.object(status, "extract_termination_info", return_value=info),
+        mock.patch.object(status.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(status.k8s, "get_backup_schedule", return_value=schedule_item),
+        mock.patch.object(status.k8s, "patch_status") as patch_status,
+    ):
+        status._sync_scan_from_job(job, "sched", "data")
+
+    result = patch_status.call_args.kwargs["status"]
+    assert result.backups[0].phase == Phase.COMPLETED
+    assert result.backups[0].last_backup_time == "2026-01-01T00:00:00Z"
+    assert [snapshot.id for snapshot in result.backups[0].snapshots] == ["abc"]
+
+
 def test_restore_active_job_with_blocked_pod_is_failed() -> None:
     job = JobStatus(name="j", namespace="ns", labels={LABEL_RESTORE: "rt"}, active=1)
     blocker = TerminationInfo(
