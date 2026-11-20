@@ -20,9 +20,12 @@ from pydantic import BaseModel
 
 from common import (
     CRD_GROUP,
+    CRD_PLURAL_BACKUPSCHEDULES,
     CRD_PLURAL_RESTORES,
     CRD_VERSION,
     JOB_TTL_SECONDS,
+    LABEL_RESTORE,
+    LABEL_SCHEDULE,
     OPERATOR_VERSION,
     make_restore_labels,
 )
@@ -32,6 +35,7 @@ from k8s import (
     get_batch_api,
     get_custom_objects_api,
     list_backup_schedules,
+    list_cronjobs_for_schedule,
 )
 
 logger = logging.getLogger("api")
@@ -102,6 +106,7 @@ def _schedule_views() -> list[dict[str, Any]]:
                 "namespace": schedule.namespace,
                 "schedule": schedule.spec.schedule,
                 "time_zone": schedule.spec.time_zone,
+                "suspend": schedule.spec.suspend,
                 "repo": schedule.spec.repo.model_dump(by_alias=True),
                 "retention": schedule.spec.retention.model_dump(by_alias=True),
                 "status": schedule.status.model_dump(
@@ -154,6 +159,12 @@ def _trigger_backup_job(namespace: str, cronjob_name: str) -> str:
                 detail=f"CronJob '{cronjob_name}' not found in namespace '{namespace}'",
             )
         raise HTTPException(status_code=500, detail=f"Failed to read CronJob: {e}")
+
+    if cronjob.spec and cronjob.spec.suspend:
+        raise HTTPException(
+            status_code=409,
+            detail=f"CronJob '{cronjob_name}' is suspended",
+        )
 
     if not (cronjob.spec and cronjob.spec.job_template):
         raise HTTPException(status_code=500, detail="CronJob template spec is missing")
@@ -237,38 +248,162 @@ async def trigger_schedule(namespace: str, schedule_name: str) -> dict[str, Any]
     }
 
 
+def _active_backup_jobs(namespace: str, schedule_name: str) -> list[str]:
+    """Names of backup Jobs for a schedule that are still active."""
+    try:
+        jobs = get_batch_api().list_namespaced_job(
+            namespace=namespace,
+            label_selector=f"{LABEL_SCHEDULE}={schedule_name},!{LABEL_RESTORE}",
+        )
+    except ApiException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list backup jobs: {e}")
+    return [
+        job.metadata.name
+        for job in jobs.items
+        if job.metadata and job.metadata.name and job.status and job.status.active
+    ]
+
+
+def _set_suspend(namespace: str, schedule_name: str, suspend: bool) -> None:
+    """Persist the suspend flag and apply it to the schedule's CronJobs immediately."""
+    try:
+        get_custom_objects_api().patch_namespaced_custom_object(
+            group=CRD_GROUP,
+            version=CRD_VERSION,
+            namespace=namespace,
+            plural=CRD_PLURAL_BACKUPSCHEDULES,
+            name=schedule_name,
+            body={"spec": {"suspend": suspend}},
+        )
+    except ApiException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update schedule: {e}")
+
+    batch_api = get_batch_api()
+    for cronjob in list_cronjobs_for_schedule(batch_api, namespace, schedule_name):
+        if not (cronjob.metadata and cronjob.metadata.name):
+            continue
+        try:
+            batch_api.patch_namespaced_cron_job(
+                name=cronjob.metadata.name,
+                namespace=namespace,
+                body={"spec": {"suspend": suspend}},
+            )
+        except ApiException as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update CronJob '{cronjob.metadata.name}': {e}",
+            )
+
+
+@app.post("/api/schedules/{namespace}/{schedule_name}/disaster-recovery")
+async def disaster_recovery(namespace: str, schedule_name: str) -> dict[str, Any]:
+    """Suspend backups and restore every PVC in the schedule from its latest snapshot."""
+    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
+        )
+    schedule = BackupSchedule.from_crd(item)
+    if not schedule.status.backups:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
+        )
+
+    active = _active_backup_jobs(namespace, schedule_name)
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Backup job(s) still running: {', '.join(active)}. Wait for them to finish.",
+        )
+
+    _set_suspend(namespace, schedule_name, True)
+
+    triggered: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for entry in schedule.status.backups:
+        try:
+            restore_name = _create_restore(
+                namespace, schedule_name, entry.pvc_name, entry.pvc_name, "latest"
+            )
+            triggered.append({"pvc": entry.pvc_name, "restore": restore_name})
+        except ApiException as e:
+            errors.append({"pvc": entry.pvc_name, "error": str(e)})
+
+    return {
+        "status": "triggered",
+        "message": (
+            f"Backups suspended; triggered {len(triggered)}/{len(schedule.status.backups)} "
+            f"restores for '{schedule_name}'"
+        ),
+        "triggered": triggered,
+        "errors": errors,
+    }
+
+
+@app.post("/api/schedules/{namespace}/{schedule_name}/resume")
+async def resume_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
+    """Resume scheduled backups for a BackupSchedule."""
+    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
+        )
+    _set_suspend(namespace, schedule_name, False)
+    return {
+        "status": "resumed",
+        "message": f"Backups resumed for '{schedule_name}' in namespace '{namespace}'",
+    }
+
+
 @app.get("/api/restores")
 async def list_restores() -> list[dict[str, Any]]:
     """List all Restore custom resources across the cluster."""
     return [_restore_view(Restore.from_crd(item)) for item in _list_custom(CRD_PLURAL_RESTORES)]
 
 
+def _create_restore(
+    namespace: str,
+    schedule_name: str,
+    pvc_name: str,
+    target_pvc: str,
+    snapshot_id: str,
+) -> str:
+    """Create a Restore CR and return its name."""
+    restore_name = f"restore-{pvc_name}"[:45] + f"-{int(time.time())}"
+    restore = Restore(
+        name=restore_name,
+        namespace=namespace,
+        labels=make_restore_labels(restore_name, schedule_name, pvc_name),
+        spec=RestoreSpec(
+            schedule_name=schedule_name,
+            pvc_name=pvc_name,
+            target_pvc=target_pvc,
+            snapshot_id=snapshot_id or "latest",
+        ),
+    )
+    get_custom_objects_api().create_namespaced_custom_object(
+        group=CRD_GROUP,
+        version=CRD_VERSION,
+        namespace=namespace,
+        plural=CRD_PLURAL_RESTORES,
+        body=restore.to_crd_body(CRD_GROUP, CRD_VERSION),
+    )
+    return restore_name
+
+
 @app.post("/api/restores")
 async def trigger_restore(req: CreateRestoreRequest) -> dict[str, Any]:
     """Create a Restore custom resource to initiate a restore operation."""
-    custom_api = get_custom_objects_api()
-    target_pvc = req.target_pvc or req.pvc_name
-
-    restore_name = f"restore-{req.pvc_name}"[:45] + f"-{int(time.time())}"
-    restore = Restore(
-        name=restore_name,
-        namespace=req.namespace,
-        labels=make_restore_labels(restore_name, req.schedule_name, req.pvc_name),
-        spec=RestoreSpec(
-            schedule_name=req.schedule_name,
-            pvc_name=req.pvc_name,
-            target_pvc=target_pvc,
-            snapshot_id=req.snapshot_id or "latest",
-        ),
-    )
-
     try:
-        custom_api.create_namespaced_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            namespace=req.namespace,
-            plural=CRD_PLURAL_RESTORES,
-            body=restore.to_crd_body(CRD_GROUP, CRD_VERSION),
+        restore_name = _create_restore(
+            req.namespace,
+            req.schedule_name,
+            req.pvc_name,
+            req.target_pvc or req.pvc_name,
+            req.snapshot_id,
         )
     except ApiException as e:
         raise HTTPException(status_code=500, detail=f"Failed to create Restore resource: {e}")

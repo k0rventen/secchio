@@ -46,6 +46,7 @@ class WorkloadConfig:
     mode: str
     schedule: str = ""
     time_zone: str = ""
+    suspend: bool = False
     retention: RetentionConfig | None = None
     snapshot_id: str = ""
     target_pvc: str = ""
@@ -107,6 +108,7 @@ def create_cronjob(config: WorkloadConfig) -> V1CronJob:
         spec=V1CronJobSpec(
             schedule=config.schedule,
             time_zone=config.time_zone or None,
+            suspend=config.suspend,
             concurrency_policy="Forbid",
             successful_jobs_history_limit=1,
             failed_jobs_history_limit=2,

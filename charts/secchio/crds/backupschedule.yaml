@@ -39,6 +39,9 @@ spec:
         - name: Last Backup
           type: string
           jsonPath: .status.lastBackupTime
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -112,6 +115,12 @@ spec:
                     keepYearly:
                       type: integer
                       minimum: 0
+                suspend:
+                  type: boolean
+                  description: >-
+                    Pause scheduled backups (e.g. during disaster recovery).
+                    Manual triggers are refused while suspended.
+                  default: false
             status:
               type: object
               properties:

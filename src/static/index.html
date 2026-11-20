@@ -100,6 +100,8 @@
         }
         .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; }
         .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+        .stat-health { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+        .stat-health .stat-word { font-size: 0.78rem; font-weight: 500; color: var(--text-muted); margin-left: 3px; }
         .stat-sep { color: var(--text-faint); font-weight: 500; margin: 0 4px; }
 
         /* Navigation Tabs */
@@ -162,35 +164,22 @@
         .card-title { font-size: 1.15rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px; }
         .card-body { padding: 20px; }
 
-        .meta-grid {
+        .meta-list {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px 24px;
             font-size: 0.85rem;
             margin-bottom: 16px;
             padding-bottom: 16px;
             border-bottom: 1px dashed var(--border);
         }
+        .meta-list .meta-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .meta-list dt { color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .meta-list dd { margin: 0; color: var(--text-main); word-break: break-word; }
+        .meta-list code { font-family: monospace; font-size: 0.82rem; }
+        .meta-muted { color: var(--text-faint); }
+        .meta-sep { color: var(--text-faint); }
         .meta-item strong { color: var(--text-muted); }
-        .meta-grid .meta-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-
-        /* Meta value chips (schedule, repo, retention, summary) */
-        .meta-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
-        .meta-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 2px 10px;
-            border-radius: 9999px;
-            font-size: 0.78rem;
-            font-weight: 600;
-            background: var(--surface-hover);
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-        }
-        .meta-chip__label { color: var(--text-faint); font-weight: 600; }
-        .meta-chip__value { color: var(--text-main); font-variant-numeric: tabular-nums; }
-        .meta-empty { color: var(--text-faint); font-style: italic; }
 
         /* Backups nested table/cards */
         .collapse-toggle {
@@ -479,10 +468,8 @@
                 </div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Running / Healthy / Failed</div>
-                <div class="stat-value">
-                    <span id="stat-running" style="color: var(--info);">-</span><span class="stat-sep">/</span><span id="stat-healthy" style="color: var(--success);">-</span><span class="stat-sep">/</span><span id="stat-failed" style="color: var(--danger);">-</span>
-                </div>
+                <div class="stat-label">Backup Health</div>
+                <div class="stat-value stat-health" id="stat-health"></div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Recent Restores</div>
@@ -591,6 +578,24 @@
         </div>
     </div>
 
+    <!-- Confirm Disaster Recovery Modal -->
+    <div class="modal-overlay" id="confirm-disaster-recovery-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Disaster Recovery</div>
+                <button class="btn btn-secondary btn-sm" onclick="closeDisasterRecoveryModal()">✕</button>
+            </div>
+            <div class="confirm-body">
+                <p>Suspend all backups for <strong id="confirm-dr-name"></strong> and restore the latest snapshot of all <strong id="confirm-dr-count"></strong> PVCs <strong>in place</strong>?</p>
+                <p style="margin-top: 10px; color: var(--danger); font-size: 0.85rem;">Existing data in the PVCs will be overwritten.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDisasterRecoveryModal()">Cancel</button>
+                <button type="button" class="btn btn-outline-danger" id="btn-confirm-disaster-recovery" onclick="confirmDisasterRecovery()">Yes, Recover</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirm Backup Modal -->
     <div class="modal-overlay" id="confirm-backup-modal">
         <div class="modal">
@@ -661,15 +666,6 @@
             return JSON.stringify(value).replace(/"/g, '&quot;');
         }
 
-        function chip(value, { label, color } = {}) {
-            const labelHtml = label ? `<span class="meta-chip__label">${escapeHtml(label)}</span>` : '';
-            const style = color ? ` style="color: ${color}"` : '';
-            return `<span class="meta-chip">${labelHtml}<span class="meta-chip__value"${style}>${escapeHtml(value)}</span></span>`;
-        }
-
-        function chips(parts) {
-            return `<span class="meta-chips">${parts.join('')}</span>`;
-        }
 
         async function loadVersion() {
             try {
@@ -721,20 +717,38 @@
             let healthyBackups = 0;
             let runningBackups = 0;
             let failedBackups = 0;
+            let pendingBackups = 0;
+            let suspendedBackups = 0;
 
             schedules.forEach(s => {
                 const summary = s.status?.summary || {};
-                totalBackups += (s.backups?.length ?? summary.totalBackups ?? 0);
-                healthyBackups += (summary.healthyBackups || 0);
-                runningBackups += (summary.runningBackups || 0);
-                failedBackups += (summary.failedBackups || 0);
+                const total = s.backups?.length ?? summary.totalBackups ?? 0;
+                totalBackups += total;
+                if (s.suspend) {
+                    suspendedBackups += total;
+                    return;
+                }
+                const healthy = summary.healthyBackups || 0;
+                const running = summary.runningBackups || 0;
+                const failed = summary.failedBackups || 0;
+                healthyBackups += healthy;
+                runningBackups += running;
+                failedBackups += failed;
+                pendingBackups += Math.max(0, total - healthy - running - failed);
             });
+
+            const healthParts = [];
+            if (pendingBackups) healthParts.push(`<span style="color: var(--warning);">${pendingBackups}<span class="stat-word">pending</span></span>`);
+            if (runningBackups) healthParts.push(`<span style="color: var(--info);">${runningBackups}<span class="stat-word">running</span></span>`);
+            if (healthyBackups) healthParts.push(`<span style="color: var(--success);">${healthyBackups}<span class="stat-word">healthy</span></span>`);
+            if (failedBackups) healthParts.push(`<span style="color: var(--danger);">${failedBackups}<span class="stat-word">failed</span></span>`);
+            if (suspendedBackups) healthParts.push(`<span style="color: var(--text-muted);">${suspendedBackups}<span class="stat-word">suspended</span></span>`);
 
             document.getElementById('stat-schedules').textContent = schedules.length;
             document.getElementById('stat-backups').textContent = totalBackups;
-            document.getElementById('stat-healthy').textContent = healthyBackups;
-            document.getElementById('stat-running').textContent = runningBackups;
-            document.getElementById('stat-failed').textContent = failedBackups;
+            document.getElementById('stat-health').innerHTML = healthParts.length
+                ? healthParts.join('')
+                : '<span style="color: var(--text-faint);">0</span>';
             document.getElementById('stat-restores').textContent = restores.length;
         }
 
@@ -748,35 +762,39 @@
             container.innerHTML = schedules.map(s => {
                 const allOk = s.status?.allOk ? '✓ All OK' : '';
                 const summary = s.status?.summary || {};
-                const summaryParts = [
-                    { label: 'Total', value: summary.totalBackups ?? 0, color: 'var(--text-faint)' },
-                    { label: 'Healthy', value: summary.healthyBackups ?? 0, color: 'var(--success)' },
-                    { label: 'Failed', value: summary.failedBackups ?? 0, color: 'var(--danger)' },
-                    { label: 'Running', value: summary.runningBackups ?? 0, color: 'var(--info)' },
-                ];
+                const backupCount = (s.backups && s.backups.length) || 0;
+                const total = summary.totalBackups ?? backupCount;
+                const healthy = summary.healthyBackups ?? 0;
+                const running = summary.runningBackups ?? 0;
+                const failed = summary.failedBackups ?? 0;
+                const pending = Math.max(0, total - healthy - running - failed);
+
                 const retention = s.retention || {};
                 const retentionParts = [];
-                if (retention.keepDaily !== undefined && retention.keepDaily !== null && retention.keepDaily !== '') retentionParts.push({ label: 'Daily', value: retention.keepDaily });
-                if (retention.keepWeekly !== undefined && retention.keepWeekly !== null && retention.keepWeekly !== '') retentionParts.push({ label: 'Weekly', value: retention.keepWeekly });
-                if (retention.keepMonthly !== undefined && retention.keepMonthly !== null && retention.keepMonthly !== '') retentionParts.push({ label: 'Monthly', value: retention.keepMonthly });
+                if (retention.keepDaily !== undefined && retention.keepDaily !== null && retention.keepDaily !== '') retentionParts.push(`Daily ${retention.keepDaily}`);
+                if (retention.keepWeekly !== undefined && retention.keepWeekly !== null && retention.keepWeekly !== '') retentionParts.push(`Weekly ${retention.keepWeekly}`);
+                if (retention.keepMonthly !== undefined && retention.keepMonthly !== null && retention.keepMonthly !== '') retentionParts.push(`Monthly ${retention.keepMonthly}`);
 
                 const backupsHtml = (s.backups && s.backups.length > 0)
                     ? s.backups.map(b => renderBackupItem(b, s)).join('')
                     : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
-                const backupCount = (s.backups && s.backups.length) || 0;
                 const scheduleKey = `${s.namespace}/${s.name}`;
                 const expanded = expandedSchedules.has(scheduleKey);
 
-                const timeZone = s.time_zone || 'UTC (default)';
-                const scheduleHtml = chips([
-                    chip(s.schedule || '-'),
-                    chip(timeZone, { label: 'TZ' }),
-                ]);
-                const repoHtml = chips([chip(s.repo?.endpoint || '-')]);
-                const retentionHtml = retentionParts.length
-                    ? chips(retentionParts.map(r => chip(r.value, { label: r.label })))
-                    : '<span class="meta-empty">Not configured</span>';
-                const summaryHtml = chips(summaryParts.map(p => chip(p.value, { label: p.label, color: p.color })));
+                const scheduleText = `${escapeHtml(s.schedule || '-')}${s.time_zone ? ` <span class="meta-muted">(${escapeHtml(s.time_zone)})</span>` : ''}`;
+                const retentionText = retentionParts.length
+                    ? escapeHtml(retentionParts.join(' · '))
+                    : '<span class="meta-muted">Not configured</span>';
+                const summaryParts = [`${total} total`];
+                if (s.suspend) {
+                    summaryParts.push(`<span style="color: var(--text-muted);">${total} suspended</span>`);
+                } else {
+                    if (healthy) summaryParts.push(`<span style="color: var(--success);">${healthy} healthy</span>`);
+                    if (running) summaryParts.push(`<span style="color: var(--info);">${running} running</span>`);
+                    if (failed) summaryParts.push(`<span style="color: var(--danger);">${failed} failed</span>`);
+                    if (pending) summaryParts.push(`<span style="color: var(--warning);">${pending} pending</span>`);
+                }
+                const summaryText = summaryParts.join('<span class="meta-sep"> · </span>');
 
                 return `
                 <div class="card">
@@ -784,17 +802,23 @@
                         <div class="card-title">
                             <span>${escapeHtml(s.namespace)} / ${escapeHtml(s.name)}</span>
                             ${phaseBadge(s.status?.phase)}
+                            ${s.suspend ? '<span class="badge badge-pending">Suspended</span>' : ''}
                             <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${allOk}</span>
                         </div>
-                        <button class="btn btn-secondary btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openScheduleBackupConfirmModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">▶ Trigger All</button>
+                        <div class="header-actions">
+                            ${s.suspend
+                                ? `<button class="btn btn-primary btn-sm" onclick="resumeSchedule(${jsArg(s.namespace)}, ${jsArg(s.name)})">▶ Resume Backups</button>`
+                                : `<button class="btn btn-secondary btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openScheduleBackupConfirmModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">▶ Trigger All</button>`}
+                            <button class="btn btn-outline-danger btn-sm" ${backupCount === 0 ? 'disabled' : ''} onclick="openDisasterRecoveryModal(${jsArg(s.namespace)}, ${jsArg(s.name)}, ${backupCount})">⚠ Disaster Recovery</button>
+                        </div>
                     </div>
                     <div class="card-body">
-                        <div class="meta-grid">
-                            <div class="meta-item"><strong>Schedule:</strong>${scheduleHtml}</div>
-                            <div class="meta-item"><strong>Repo:</strong>${repoHtml}</div>
-                            <div class="meta-item"><strong>Retention:</strong>${retentionHtml}</div>
-                            <div class="meta-item"><strong>Summary:</strong>${summaryHtml}</div>
-                        </div>
+                        <dl class="meta-list">
+                            <div class="meta-item"><dt>Schedule</dt><dd>${scheduleText}</dd></div>
+                            <div class="meta-item"><dt>Repo</dt><dd><code>${escapeHtml(s.repo?.endpoint || '-')}</code></dd></div>
+                            <div class="meta-item"><dt>Retention</dt><dd>${retentionText}</dd></div>
+                            <div class="meta-item"><dt>Backups</dt><dd>${summaryText}</dd></div>
+                        </dl>
 
                         <button class="collapse-toggle" data-schedule="${escapeHtml(scheduleKey)}" onclick="toggleScheduleBackups(this)">
                             <span class="chevron">${expanded ? '▾' : '▸'}</span>
@@ -821,7 +845,7 @@
                         <span class="backup-pvc">${escapeHtml(schedule.namespace)} / ${escapeHtml(b.pvc_name)}</span>
                         ${phaseBadge(phase)}
                     </div>
-                    <button class="btn btn-secondary btn-sm" onclick="openBackupConfirmModal(${jsArg(schedule.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.cronjob_name)})">▶ Trigger Backup</button>
+                    <button class="btn btn-secondary btn-sm" ${schedule.suspend ? 'disabled' : ''} onclick="openBackupConfirmModal(${jsArg(schedule.namespace)}, ${jsArg(b.pvc_name)}, ${jsArg(b.cronjob_name)})">▶ Trigger Backup</button>
                 </div>
                 <div class="backup-meta-row">
                     <div class="meta-item"><strong>CronJob:</strong> <code>${escapeHtml(b.cronjob_name)}</code></div>
@@ -955,6 +979,65 @@
                 closeScheduleBackupConfirmModal();
             } finally {
                 btn.disabled = false;
+            }
+        }
+
+        function openDisasterRecoveryModal(namespace, scheduleName, count) {
+            const modal = document.getElementById('confirm-disaster-recovery-modal');
+            document.getElementById('confirm-dr-name').textContent = `${namespace} / ${scheduleName}`;
+            document.getElementById('confirm-dr-count').textContent = count;
+            modal.dataset.scheduleNamespace = namespace;
+            modal.dataset.scheduleName = scheduleName;
+            modal.style.display = 'flex';
+        }
+
+        function closeDisasterRecoveryModal() {
+            document.getElementById('confirm-disaster-recovery-modal').style.display = 'none';
+        }
+
+        async function confirmDisasterRecovery() {
+            const modal = document.getElementById('confirm-disaster-recovery-modal');
+            const btn = document.getElementById('btn-confirm-disaster-recovery');
+            btn.disabled = true;
+            try {
+                await disasterRecovery(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
+                closeDisasterRecoveryModal();
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function disasterRecovery(namespace, scheduleName) {
+            try {
+                showToast(`Suspending backups and restoring ${namespace}/${scheduleName}...`, 'info');
+                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/disaster-recovery`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to start disaster recovery');
+                if (data.errors && data.errors.length > 0) {
+                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
+                } else {
+                    showToast(data.message, 'success');
+                }
+                setTimeout(loadAllData, 2000);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function resumeSchedule(namespace, scheduleName) {
+            try {
+                showToast(`Resuming backups for ${namespace}/${scheduleName}...`, 'info');
+                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/resume`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to resume backups');
+                showToast(data.message, 'success');
+                setTimeout(loadAllData, 2000);
+            } catch (err) {
+                showToast(err.message, 'error');
             }
         }
 

@@ -79,6 +79,7 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
                 mode="backup",
                 schedule=schedule_spec.schedule,
                 time_zone=schedule_spec.time_zone,
+                suspend=schedule_spec.suspend,
                 retention=schedule_spec.retention,
                 schedule_name=name,
                 owner_kind="BackupSchedule",

@@ -135,6 +135,7 @@ def test_backup_cronjob_spec_and_env() -> None:
     assert spec is not None
     assert spec.schedule == "* * * * *"
     assert spec.time_zone == "Europe/Brussels"
+    assert spec.suspend is False
     assert spec.concurrency_policy == "Forbid"
     assert spec.successful_jobs_history_limit == 1
     assert spec.failed_jobs_history_limit == 2
@@ -152,6 +153,15 @@ def test_backup_cronjob_spec_and_env() -> None:
     # Canonical quantities: the API server stores 1000m as 1.
     assert container.resources is not None
     assert container.resources.limits == {"cpu": "1", "memory": "512Mi"}
+
+
+def test_backup_cronjob_suspend_flag() -> None:
+    config = _backup_config()
+    config.suspend = True
+    cronjob = create_cronjob(config)
+
+    assert cronjob.spec is not None
+    assert cronjob.spec.suspend is True
 
 
 def test_backup_cronjob_does_not_guess_schedule_label() -> None:

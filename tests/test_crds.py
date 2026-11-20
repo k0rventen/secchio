@@ -53,6 +53,28 @@ def test_schedule_time_zone_wire_key() -> None:
     assert BackupScheduleSpec.model_validate(spec.model_dump(by_alias=True)) == spec
 
 
+def test_schedule_suspend_defaults_false_and_round_trips() -> None:
+    spec = BackupScheduleSpec.model_validate(
+        {
+            "pvc": {"selector": {"app": "nginx"}},
+            "schedule": "0 2 * * *",
+            "repo": {"endpoint": "minio/bucket", "secretName": "s3"},
+        }
+    )
+    assert spec.suspend is False
+    assert spec.model_dump(by_alias=True)["suspend"] is False
+
+    suspended = BackupScheduleSpec.model_validate(
+        {
+            "pvc": {"selector": {"app": "nginx"}},
+            "schedule": "0 2 * * *",
+            "repo": {"endpoint": "minio/bucket", "secretName": "s3"},
+            "suspend": True,
+        }
+    )
+    assert suspended.suspend is True
+
+
 def test_repo_insecure_tls_wire_key() -> None:
     repo = S3BackendConfig.model_validate(
         {"endpoint": "minio/bucket", "secretName": "s3", "insecureTLS": True}
