@@ -136,6 +136,7 @@ class BackupScheduleSpec(Model):
     time_zone: str = ""
     repo: S3BackendConfig = Field(default_factory=S3BackendConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    suspend: bool = False
 
 
 class BackupScheduleSummary(Model):

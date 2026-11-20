@@ -33,7 +33,7 @@ The chart is published as an OCI artifact on GHCR:
 ```sh
 helm install secchio-operator oci://ghcr.io/k0rventen/secchio \
   --create-namespace --namespace secchio-system \
-  --version 0.10.2
+  --version 0.11.0
 ```
 
 The CRDs are bundled in `crds/` and are installed automatically on the first install.
@@ -113,6 +113,12 @@ spec:
     keepWeekly: 4
     keepMonthly: 3
 ```
+
+# Disaster recovery
+Set `spec.suspend: true` on a `BackupSchedule` to pause its scheduled backups
+(manual triggers are refused while suspended). The UI's **Disaster Recovery**
+action does this and also creates one `Restore` per PVC, restoring the latest
+snapshot **in place**; use **Resume Backups** to re-enable the schedule.
 
 # Namespaces
 `BackupSchedule` is namespaced: it only selects PVCs in its own namespace, and the
