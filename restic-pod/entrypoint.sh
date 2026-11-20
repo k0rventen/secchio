@@ -45,6 +45,14 @@ if [ "${SECCHIO_MODE:-}" = "backup" ]; then
     printf '%s' "$SNAPS_JSON" | jq -r 'sort_by(.time) | reverse | .[] | "SNAP=\(.short_id) \(.time) \(.summary.total_bytes_processed)"'
   } > /dev/termination-log
 
+elif [ "${SECCHIO_MODE:-}" = "scan" ]; then
+  # List the repo's snapshots so the operator can repopulate the schedule status
+  # (e.g. after a reinstall). Newest first, so a truncated termination log keeps
+  # the newest entries.
+  restic $TLS_FLAG snapshots --json \
+    | jq -r 'sort_by(.time) | reverse | .[] | "SNAP=\(.short_id) \(.time) \(.summary.total_bytes_processed // 0)"' \
+    > /dev/termination-log
+
 elif [ "${SECCHIO_MODE:-}" = "restore" ]; then
   SNAP="${SECCHIO_SNAPSHOT:-latest}"
   # resolve the snapshot first: this checks the backend is reachable and that
@@ -56,6 +64,6 @@ elif [ "${SECCHIO_MODE:-}" = "restore" ]; then
   printf 'RESTORED_SNAPSHOT_ID=%s\n' "$RESOLVED" > /dev/termination-log
 
 else
-  echo "SECCHIO_MODE must be 'backup' or 'restore' (got '${SECCHIO_MODE:-}')" >&2
+  echo "SECCHIO_MODE must be 'backup', 'restore' or 'scan' (got '${SECCHIO_MODE:-}')" >&2
   exit 2
 fi
