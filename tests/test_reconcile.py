@@ -63,6 +63,24 @@ def test_schedule_creates_cronjob_for_matching_pvc() -> None:
     assert entries[0].phase == Phase.PENDING
 
 
+def test_schedule_propagates_suspend_to_cronjob() -> None:
+    spec = {**SCHEDULE_SPEC, "suspend": True}
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
+        mock.patch.object(reconcile.status, "reconcile_schedule_status"),
+    ):
+        reconcile.schedule(name="sched", namespace="ns", spec=spec, uid="uid")
+
+    cronjob = create.call_args.args[1]
+    assert cronjob.spec.suspend is True
+
+
 def test_schedule_deletes_orphaned_cronjob() -> None:
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
