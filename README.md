@@ -67,7 +67,7 @@ the S3 repository.
 
 Deploy the operator
 ```sh
-helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.10.2
+helm install secchio-operator oci://ghcr.io/k0rventen/secchio --create-namespace --namespace secchio-system --version 0.11.0
 ```
 
 The operator should start, and you can access the ui with a port-forward:
@@ -112,6 +112,22 @@ spec:
 ```
 
 Have a look at tests/test-manifests.yaml for a full example.
+
+### Disaster recovery
+
+The UI's **Disaster Recovery** button suspends every backup for a schedule and
+restores the latest snapshot of each PVC **in place** (existing data is
+overwritten). It refuses to start while a backup Job is still running.
+
+Under the hood this sets `spec.suspend: true` on the `BackupSchedule` (the
+operator sets `suspend: true` on the schedule's CronJobs) and creates one
+`Restore` per PVC. Use **Resume Backups** (or set `spec.suspend: false`) to
+re-enable the schedule. You can also pause backups without restoring anything:
+
+```sh
+kubectl patch backupschedule python-notes -n production \
+  --type merge -p '{"spec":{"suspend":true}}'
+```
 
 ### Local development with Tilt
 
