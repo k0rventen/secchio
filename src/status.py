@@ -23,6 +23,7 @@ from common import (
     CRD_PLURAL_RESTORES,
     LABEL_PVC_NAME,
     LABEL_RESTORE,
+    LABEL_SCAN,
     LABEL_SCHEDULE,
     extract_pvc_name,
     extract_restore_name,
@@ -133,6 +134,11 @@ def job_event(job: JobStatus) -> None:
         return
     if restore_name := extract_restore_name(job.labels):
         _sync_restore_from_job(job, restore_name)
+    elif job.labels.get(LABEL_SCAN):
+        schedule_name = extract_schedule_name(job.labels)
+        pvc_name = extract_pvc_name(job.labels)
+        if schedule_name and pvc_name:
+            _sync_scan_from_job(job, schedule_name, pvc_name)
     elif schedule_name := extract_schedule_name(job.labels):
         pvc_name = extract_pvc_name(job.labels)
         if pvc_name:
@@ -146,7 +152,8 @@ def sync_backup_entry(schedule_name: str, namespace: str, pvc_name: str) -> None
             jobs = k8s.get_batch_api().list_namespaced_job(
                 namespace=namespace,
                 label_selector=(
-                    f"{LABEL_SCHEDULE}={schedule_name},{LABEL_PVC_NAME}={pvc_name},!{LABEL_RESTORE}"
+                    f"{LABEL_SCHEDULE}={schedule_name},{LABEL_PVC_NAME}={pvc_name},"
+                    f"!{LABEL_RESTORE},!{LABEL_SCAN}"
                 ),
             )
         except (ApiException, OpenApiException, ValueError, OSError) as e:
@@ -269,6 +276,29 @@ def _failure_reason(info: TerminationInfo, job: JobStatus, fallback: str) -> str
     if info.waiting_reason:
         return info.waiting_reason
     return job.failure_reason or fallback
+
+
+def _sync_scan_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> None:
+    """Refresh one schedule entry's snapshot list from a scan Job.
+
+    A scan only lists snapshots; it must not change the entry's phase or last
+    backup time.
+    """
+    if not job.succeeded:
+        return
+    info = extract_termination_info(job.name, job.namespace)
+    if not info.snapshots:
+        return
+    with schedule_lock(job.namespace, schedule_name):
+        item = k8s.get_backup_schedule(k8s.get_custom_objects_api(), schedule_name, job.namespace)
+        if item is None:
+            return
+        schedule = BackupSchedule.from_crd(item)
+        entry = next((e for e in schedule.status.backups if e.pvc_name == pvc_name), None)
+        if entry is None:
+            return
+        entry.snapshots = info.snapshots
+        _patch_schedule_entry(schedule_name, job.namespace, entry)
 
 
 def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:

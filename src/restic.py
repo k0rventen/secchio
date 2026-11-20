@@ -294,23 +294,28 @@ def build_restic_pod(
     env: list[V1EnvVar],
     pvc_name: str,
     read_only: bool,
+    mount_pvc: bool = True,
 ) -> V1PodSpec:
-    """Build the hardened pod spec shared by backup and restore Jobs.
+    """Build the hardened pod spec shared by backup, restore and scan Jobs.
 
     Mounts the PVC at ``/data`` (read-only for backups, read-write for restores)
     next to a writable cache volume, and applies the shared security context.
+    Scan Jobs set ``mount_pvc=False``: listing snapshots only needs the repo.
     """
-    volumes = [
-        V1Volume(
-            name=f"pvc-{pvc_name}",
-            persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=pvc_name),
-        ),
-        cache_volume(),
-    ]
-    mounts = [
-        V1VolumeMount(name=f"pvc-{pvc_name}", mount_path="/data", read_only=read_only),
-        cache_mount(),
-    ]
+    volumes = [cache_volume()]
+    mounts = [cache_mount()]
+    if mount_pvc:
+        volumes.insert(
+            0,
+            V1Volume(
+                name=f"pvc-{pvc_name}",
+                persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=pvc_name),
+            ),
+        )
+        mounts.insert(
+            0,
+            V1VolumeMount(name=f"pvc-{pvc_name}", mount_path="/data", read_only=read_only),
+        )
     container = V1Container(
         name=container_name,
         image=image,
