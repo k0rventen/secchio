@@ -6,7 +6,7 @@ from kubernetes.client import V1Container, V1PodSpec
 
 from common import JOB_TTL_SECONDS, LABEL_SCHEDULE
 from crds import RetentionConfig, S3BackendConfig
-from workloads import WorkloadConfig, create_cronjob, create_restore_job
+from workloads import WorkloadConfig, create_cronjob, create_restore_job, create_scan_job
 
 REPO = S3BackendConfig(endpoint="minio/bucket", secret_name="creds")
 IMAGE = "restic/restic:latest"
@@ -24,6 +24,22 @@ def _backup_config() -> WorkloadConfig:
         schedule="* * * * *",
         time_zone="Europe/Brussels",
         retention=RetentionConfig(keep_daily=1),
+        schedule_name="sched",
+        owner_kind="BackupSchedule",
+        owner_name="sched",
+        owner_uid="uid",
+    )
+
+
+def _scan_config() -> WorkloadConfig:
+    return WorkloadConfig(
+        name="sched-backup-data-cronjob-scan-123",
+        namespace="ns",
+        pvc_name="data",
+        repo=REPO,
+        secret_name="creds",
+        image=IMAGE,
+        mode="scan",
         schedule_name="sched",
         owner_kind="BackupSchedule",
         owner_name="sched",
@@ -172,6 +188,21 @@ def test_backup_cronjob_does_not_guess_schedule_label() -> None:
     assert cronjob.metadata is not None
     assert cronjob.metadata.labels is not None
     assert cronjob.metadata.labels[LABEL_SCHEDULE] == ""
+
+
+def test_scan_job_has_no_pvc_mount() -> None:
+    job = create_scan_job(_scan_config())
+
+    spec = job.spec
+    assert spec is not None and spec.template is not None
+    pod = spec.template.spec
+    assert pod is not None
+    container = _container(pod)
+
+    assert all(m.mount_path != "/data" for m in container.volume_mounts or [])
+    assert all(v.name != "pvc-data" for v in pod.volumes or [])
+    assert _env_value(container, "SECCHIO_MODE") == "scan"
+    assert _env_value(container, "RESTIC_REPOSITORY") == "s3:minio/bucket/ns/data"
 
 
 def test_restore_job_spec_and_env() -> None:

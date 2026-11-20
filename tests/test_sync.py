@@ -8,7 +8,7 @@ from kubernetes.client import V1Job, V1JobStatus, V1ObjectMeta
 
 import restic
 import status
-from common import LABEL_PVC_NAME, LABEL_RESTORE, LABEL_SCHEDULE
+from common import LABEL_PVC_NAME, LABEL_RESTORE, LABEL_SCAN, LABEL_SCHEDULE
 from restic import TerminationInfo, parse_termination_message
 from status import JobStatus, _failed_reason
 
@@ -200,6 +200,33 @@ def test_job_status_from_job() -> None:
     assert result.namespace == "ns"
     assert result.labels == {"a": "b"}
     assert result.succeeded == 1
+
+
+def test_job_event_routes_scan() -> None:
+    with (
+        mock.patch.object(status, "sync_backup_entry") as backup,
+        mock.patch.object(status, "_sync_scan_from_job") as scan,
+    ):
+        status.job_event(
+            JobStatus(
+                name="j",
+                namespace="ns",
+                labels={LABEL_SCHEDULE: "sched", LABEL_PVC_NAME: "data", LABEL_SCAN: "true"},
+            )
+        )
+
+    scan.assert_called_once_with(mock.ANY, "sched", "data")
+    backup.assert_not_called()
+
+
+def test_sync_backup_entry_excludes_scan_jobs() -> None:
+    batch = mock.Mock()
+    batch.list_namespaced_job.return_value = mock.Mock(items=[])
+    with mock.patch.object(status.k8s, "get_batch_api", return_value=batch):
+        status.sync_backup_entry("sched", "ns", "data")
+
+    selector = batch.list_namespaced_job.call_args.kwargs["label_selector"]
+    assert f"!{LABEL_SCAN}" in selector
 
 
 def test_job_event_routes_by_label() -> None:
