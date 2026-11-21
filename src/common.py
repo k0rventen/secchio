@@ -84,22 +84,6 @@ def make_scan_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
     }
 
 
-# Label extractors
-def extract_pvc_name(labels: dict[str, str]) -> str:
-    """Extract PVC name from standard labels."""
-    return labels.get(LABEL_PVC_NAME, "")
-
-
-def extract_schedule_name(labels: dict[str, str]) -> str:
-    """Extract schedule name from standard labels."""
-    return labels.get(LABEL_SCHEDULE, "")
-
-
-def extract_restore_name(labels: dict[str, str]) -> str:
-    """Extract restore name from standard labels."""
-    return labels.get(LABEL_RESTORE, "")
-
-
 def now_iso() -> str:
     """Current time as an ISO-8601 string, used for status timestamps."""
     return datetime.now(UTC).isoformat()

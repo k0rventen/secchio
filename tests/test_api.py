@@ -189,7 +189,7 @@ def test_schedule_views_include_suspend() -> None:
     item["spec"]["suspend"] = True
     with (
         mock.patch.object(api, "get_custom_objects_api", return_value=mock.Mock()),
-        mock.patch.object(api, "list_backup_schedules", return_value=[item]),
+        mock.patch.object(api, "list_custom_objects", return_value=[item]),
     ):
         views = api._schedule_views()
 

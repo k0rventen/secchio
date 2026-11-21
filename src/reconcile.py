@@ -47,7 +47,7 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
     logger.info("Schedule %s in %s: %d PVCs match selector", name, namespace, len(matched))
 
     live = {
-        cronjob.metadata.name: cronjob
+        cronjob.metadata.name
         for cronjob in k8s.list_cronjobs_for_schedule(batch_api, namespace, name)
         if cronjob.metadata and cronjob.metadata.name
     }
@@ -74,7 +74,6 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
                 namespace=namespace,
                 pvc_name=pvc_name,
                 repo=schedule_spec.repo,
-                secret_name=schedule_spec.repo.secret_name,
                 image=RESTIC_IMAGE,
                 mode="backup",
                 schedule=schedule_spec.schedule,
@@ -111,13 +110,12 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
 
 def _api_error_message(error: ApiException) -> str:
     """The human-readable message from a Kubernetes API error, if available."""
-    if isinstance(error.body, str):
-        try:
-            body = json.loads(error.body)
-        except json.JSONDecodeError:
-            body = None
-        if isinstance(body, dict) and isinstance(body.get("message"), str):
-            return str(body["message"])
+    try:
+        body = json.loads(error.body) if isinstance(error.body, str) else None
+    except json.JSONDecodeError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        return str(body["message"])
     return error.reason or str(error)
 
 
@@ -153,7 +151,6 @@ def restore(name: str, namespace: str, spec: dict[str, Any], meta: dict[str, Any
         namespace=namespace,
         pvc_name=restore_spec.pvc_name,
         repo=schedule_cr.spec.repo,
-        secret_name=schedule_cr.spec.repo.secret_name,
         image=RESTIC_IMAGE,
         mode="restore",
         snapshot_id=restore_spec.snapshot_id,

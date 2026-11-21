@@ -30,6 +30,15 @@ def start_up(settings: kopf.OperatorSettings, **kwargs: Any) -> None:
 
 
 # BackupSchedule
+def _reconcile_schedule(name: str, namespace: str | None, spec: kopf.Spec, meta: kopf.Meta) -> None:
+    reconcile.schedule(
+        name=name,
+        namespace=namespace or "",
+        spec=dict(spec),
+        uid=meta.get("uid", ""),
+    )
+
+
 @kopf.on.create(CRD_GROUP, CRD_VERSION, "backupschedule")
 @kopf.on.update(CRD_GROUP, CRD_VERSION, "backupschedule")
 def on_schedule(
@@ -40,12 +49,7 @@ def on_schedule(
     meta: kopf.Meta,
     **kwargs: Any,
 ) -> None:
-    reconcile.schedule(
-        name=name,
-        namespace=namespace or "",
-        spec=dict(spec),
-        uid=meta.get("uid", ""),
-    )
+    _reconcile_schedule(name, namespace, spec, meta)
 
 
 @kopf.timer(CRD_GROUP, CRD_VERSION, "backupschedule", interval=60)
@@ -63,12 +67,7 @@ def check_schedules(
     missed (operator restart, watch interruption), and without this the CRD would
     keep a stale entry until the next Job event.
     """
-    reconcile.schedule(
-        name=name,
-        namespace=namespace or "",
-        spec=dict(spec),
-        uid=meta.get("uid", ""),
-    )
+    _reconcile_schedule(name, namespace, spec, meta)
     status_mod.resync_schedule(name, namespace or "")
 
 
