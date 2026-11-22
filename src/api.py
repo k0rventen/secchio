@@ -36,8 +36,8 @@ from k8s import (
     get_backup_schedule,
     get_batch_api,
     get_custom_objects_api,
-    list_backup_schedules,
     list_cronjobs_for_schedule,
+    list_custom_objects,
 )
 from workloads import WorkloadConfig, create_scan_job
 
@@ -67,19 +67,23 @@ class CreateRestoreRequest(BaseModel):
     snapshot_id: str = "latest"
 
 
-def _list_custom(plural: str) -> list[dict[str, Any]]:
-    """List a custom resource across all namespaces, or ``[]`` on failure."""
-    try:
-        result: Any = get_custom_objects_api().list_cluster_custom_object(
-            group=CRD_GROUP,
-            version=CRD_VERSION,
-            plural=plural,
+def _get_schedule_or_404(
+    namespace: str, schedule_name: str, *, require_backups: bool = False
+) -> tuple[BackupSchedule, dict[str, Any]]:
+    """Read a BackupSchedule, raising 404 when it (or its backups) is missing."""
+    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
         )
-    except ApiException:
-        logger.exception("Failed to list %s", plural)
-        return []
-    items = result.get("items", []) if isinstance(result, dict) else []
-    return [item for item in items if isinstance(item, dict)]
+    schedule = BackupSchedule.from_crd(item)
+    if require_backups and not schedule.status.backups:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
+        )
+    return schedule, item
 
 
 def _restore_view(restore: Restore) -> dict[str, Any]:
@@ -101,7 +105,7 @@ def _restore_view(restore: Restore) -> dict[str, Any]:
 def _schedule_views() -> list[dict[str, Any]]:
     """BackupSchedules with their per-PVC status."""
     views = []
-    for item in list_backup_schedules(get_custom_objects_api()):
+    for item in list_custom_objects(get_custom_objects_api(), CRD_PLURAL_BACKUPSCHEDULES):
         schedule = BackupSchedule.from_crd(item)
         views.append(
             {
@@ -115,18 +119,7 @@ def _schedule_views() -> list[dict[str, Any]]:
                 "status": schedule.status.model_dump(
                     by_alias=True, mode="json", exclude={"backups"}
                 ),
-                "backups": [
-                    {
-                        "pvc_name": entry.pvc_name,
-                        "cronjob_name": entry.cronjob_name,
-                        "phase": str(entry.phase),
-                        "last_backup_time": entry.last_backup_time,
-                        "snapshots": [snapshot.model_dump() for snapshot in entry.snapshots],
-                        "message": entry.message,
-                        "reason": entry.reason,
-                    }
-                    for entry in schedule.status.backups
-                ],
+                "backups": [entry.model_dump(mode="json") for entry in schedule.status.backups],
             },
         )
     return views
@@ -169,12 +162,10 @@ def _trigger_backup_job(namespace: str, cronjob_name: str) -> str:
             detail=f"CronJob '{cronjob_name}' is suspended",
         )
 
-    if not (cronjob.spec and cronjob.spec.job_template):
+    template = cronjob.spec.job_template if cronjob.spec else None
+    if template is None or template.spec is None:
         raise HTTPException(status_code=500, detail="CronJob template spec is missing")
-    template = cronjob.spec.job_template
     job_spec = template.spec
-    if job_spec is None:
-        raise HTTPException(status_code=500, detail="CronJob template spec is missing")
 
     # Kubernetes names are capped at 63 characters.
     manual_job_name = f"{cronjob_name[:40]}-manual-{int(time.time())}"
@@ -214,18 +205,7 @@ async def trigger_backup(namespace: str, cronjob_name: str) -> dict[str, Any]:
 @app.post("/api/schedules/{namespace}/{schedule_name}/trigger")
 async def trigger_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Trigger a manual backup for every PVC under a BackupSchedule."""
-    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
-        )
-    schedule = BackupSchedule.from_crd(item)
-    if not schedule.status.backups:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
-        )
+    schedule, _ = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
 
     triggered: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
@@ -265,7 +245,6 @@ def _create_scan_job(
         namespace=namespace,
         pvc_name=pvc_name,
         repo=schedule.spec.repo,
-        secret_name=schedule.spec.repo.secret_name,
         image=RESTIC_IMAGE,
         mode="scan",
         schedule_name=schedule_name,
@@ -280,19 +259,7 @@ def _create_scan_job(
 @app.post("/api/schedules/{namespace}/{schedule_name}/scan")
 async def scan_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Create a scan Job per PVC to refresh the schedule's snapshot list."""
-    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
-        )
-    schedule = BackupSchedule.from_crd(item)
-    if not schedule.status.backups:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
-        )
-
+    schedule, item = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
     uid = str((item.get("metadata") or {}).get("uid", ""))
     triggered: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
@@ -364,18 +331,7 @@ def _set_suspend(namespace: str, schedule_name: str, suspend: bool) -> None:
 @app.post("/api/schedules/{namespace}/{schedule_name}/disaster-recovery")
 async def disaster_recovery(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Suspend backups and restore every PVC in the schedule from its latest snapshot."""
-    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
-        )
-    schedule = BackupSchedule.from_crd(item)
-    if not schedule.status.backups:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
-        )
+    schedule, _ = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
 
     active = _active_backup_jobs(namespace, schedule_name)
     if active:
@@ -411,12 +367,7 @@ async def disaster_recovery(namespace: str, schedule_name: str) -> dict[str, Any
 @app.post("/api/schedules/{namespace}/{schedule_name}/resume")
 async def resume_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Resume scheduled backups for a BackupSchedule."""
-    item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"BackupSchedule '{schedule_name}' not found in namespace '{namespace}'",
-        )
+    _get_schedule_or_404(namespace, schedule_name)
     _set_suspend(namespace, schedule_name, False)
     return {
         "status": "resumed",
@@ -427,7 +378,8 @@ async def resume_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
 @app.get("/api/restores")
 async def list_restores() -> list[dict[str, Any]]:
     """List all Restore custom resources across the cluster."""
-    return [_restore_view(Restore.from_crd(item)) for item in _list_custom(CRD_PLURAL_RESTORES)]
+    items = list_custom_objects(get_custom_objects_api(), CRD_PLURAL_RESTORES)
+    return [_restore_view(Restore.from_crd(item)) for item in items]
 
 
 def _create_restore(

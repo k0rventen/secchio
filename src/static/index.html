@@ -544,7 +544,7 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Trigger Restore</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeRestoreModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('restore-modal')">✕</button>
             </div>
             <form id="restore-form" onsubmit="submitRestore(event)">
                 <div class="modal-body">
@@ -578,7 +578,7 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" onclick="closeRestoreModal()">Cancel</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('restore-modal')">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="btn-submit-restore">Start Restore</button>
                 </div>
             </form>
@@ -590,14 +590,14 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Delete Restore</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeDeleteRestoreModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('confirm-delete-restore-modal')">✕</button>
             </div>
             <div class="confirm-body">
                 <p>Delete restore <strong id="confirm-delete-restore-name"></strong>? This removes the Restore object and its Job.</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeDeleteRestoreModal()">Cancel</button>
-                <button type="button" class="btn btn-outline-danger" id="btn-confirm-delete-restore" onclick="confirmDeleteRestore()">Yes, Delete</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('confirm-delete-restore-modal')">Cancel</button>
+                <button type="button" class="btn btn-outline-danger" id="btn-confirm-delete-restore" onclick="confirmAction('btn-confirm-delete-restore', 'confirm-delete-restore-modal')">Yes, Delete</button>
             </div>
         </div>
     </div>
@@ -607,14 +607,14 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Trigger All Backups</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeScheduleBackupConfirmModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('confirm-schedule-backup-modal')">✕</button>
             </div>
             <div class="confirm-body">
                 <p>Trigger a backup for all <strong id="confirm-schedule-backup-count"></strong> PVCs under schedule <strong id="confirm-schedule-backup-name"></strong>?</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeScheduleBackupConfirmModal()">Cancel</button>
-                <button type="button" class="btn btn-primary" id="btn-confirm-schedule-backup" onclick="confirmTriggerScheduleBackup()">Yes, Trigger All</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('confirm-schedule-backup-modal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-schedule-backup" onclick="confirmAction('btn-confirm-schedule-backup', 'confirm-schedule-backup-modal')">Yes, Trigger All</button>
             </div>
         </div>
     </div>
@@ -624,7 +624,7 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Disaster Recovery</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeDisasterRecoveryModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('confirm-disaster-recovery-modal')">✕</button>
             </div>
             <div class="confirm-body">
                 <p>Suspend all backups for <strong id="confirm-dr-name"></strong> and restore the latest snapshot of all <strong id="confirm-dr-count"></strong> PVCs <strong>in place</strong>?</p>
@@ -633,8 +633,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeDisasterRecoveryModal()">Cancel</button>
-                <button type="button" class="btn btn-outline-danger" id="btn-confirm-disaster-recovery" onclick="confirmDisasterRecovery()">Yes, Recover</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('confirm-disaster-recovery-modal')">Cancel</button>
+                <button type="button" class="btn btn-outline-danger" id="btn-confirm-disaster-recovery" onclick="confirmAction('btn-confirm-disaster-recovery', 'confirm-disaster-recovery-modal')">Yes, Recover</button>
             </div>
         </div>
     </div>
@@ -644,15 +644,15 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Scan Repository</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeScanModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('confirm-scan-modal')">✕</button>
             </div>
             <div class="confirm-body">
                 <p>Create a scan Job for all <strong id="confirm-scan-count"></strong> PVCs under <strong id="confirm-scan-name"></strong>?</p>
                 <p style="margin-top: 10px; color: var(--warning); font-size: 0.85rem;">Scans run asynchronously. Snapshots appear once the Jobs complete — check the Jobs/pods if nothing updates.</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeScanModal()">Cancel</button>
-                <button type="button" class="btn btn-primary" id="btn-confirm-scan" onclick="confirmScan()">Yes, Scan</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('confirm-scan-modal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-scan" onclick="confirmAction('btn-confirm-scan', 'confirm-scan-modal')">Yes, Scan</button>
             </div>
         </div>
     </div>
@@ -662,14 +662,14 @@
         <div class="modal">
             <div class="modal-header">
                 <div class="modal-title">Trigger Backup</div>
-                <button class="btn btn-secondary btn-sm" onclick="closeBackupConfirmModal()">✕</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal('confirm-backup-modal')">✕</button>
             </div>
             <div class="confirm-body">
                 <p>Are you sure you want to trigger a backup on PVC <strong id="confirm-backup-target"></strong>?</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" onclick="closeBackupConfirmModal()">Cancel</button>
-                <button type="button" class="btn btn-primary" id="btn-confirm-backup" onclick="confirmTriggerBackup()">Yes, Trigger Backup</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('confirm-backup-modal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-backup" onclick="confirmAction('btn-confirm-backup', 'confirm-backup-modal')">Yes, Trigger Backup</button>
             </div>
         </div>
     </div>
@@ -683,12 +683,23 @@
         const POLL_INTERVAL_ACTIVE_MS = 5000;
         const POLL_INTERVAL_IDLE_MS = 30000;
         let pollTimer = null;
+        let pendingConfirm = null;
+        let restoreTarget = null;
+
+        const $ = (id) => document.getElementById(id);
+        const enc = encodeURIComponent;
+
+        function openModal(id) { $(id).style.display = 'flex'; }
+        function closeModal(id) {
+            $(id).style.display = 'none';
+            pendingConfirm = null;
+        }
 
         function switchTab(tab) {
-            document.getElementById('tab-schedules').style.display = tab === 'schedules' ? 'block' : 'none';
-            document.getElementById('tab-restores').style.display = tab === 'restores' ? 'block' : 'none';
-            document.getElementById('tab-btn-schedules').classList.toggle('active', tab === 'schedules');
-            document.getElementById('tab-btn-restores').classList.toggle('active', tab === 'restores');
+            $('tab-schedules').style.display = tab === 'schedules' ? 'block' : 'none';
+            $('tab-restores').style.display = tab === 'restores' ? 'block' : 'none';
+            $('tab-btn-schedules').classList.toggle('active', tab === 'schedules');
+            $('tab-btn-restores').classList.toggle('active', tab === 'restores');
             loadAllData();
         }
 
@@ -724,11 +735,10 @@
         }
 
         function showToast(message, type = 'info') {
-            const container = document.getElementById('toasts');
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.textContent = message;
-            container.appendChild(toast);
+            $('toasts').appendChild(toast);
             setTimeout(() => {
                 toast.style.opacity = '0';
                 setTimeout(() => toast.remove(), 300);
@@ -745,15 +755,70 @@
             return JSON.stringify(value).replace(/"/g, '&quot;');
         }
 
+        async function apiRequest(url, { method = 'POST', body, errorMessage = 'Request failed' } = {}) {
+            const res = await fetch(url, {
+                method,
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || errorMessage);
+            return data;
+        }
+
+        // Run an action, toast its outcome, and refresh the UI afterwards.
+        async function runAction(action, { pending, refresh = 2000, success } = {}) {
+            try {
+                if (pending) showToast(pending, 'info');
+                const data = await action();
+                if (success) success(data);
+                if (refresh) setTimeout(loadAllData, refresh);
+                return data;
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        function scheduleAction(namespace, scheduleName, action, { pending, errorMessage, refresh = 2000 }) {
+            return runAction(
+                () => apiRequest(`/api/schedules/${enc(namespace)}/${enc(scheduleName)}/${action}`, { errorMessage }),
+                {
+                    pending,
+                    refresh,
+                    success: (data) => showToast(
+                        data.errors?.length ? `${data.message} (${data.errors.length} failed)` : data.message,
+                        data.errors?.length ? 'error' : 'success',
+                    ),
+                },
+            );
+        }
+
+        function openConfirm(modalId, action) {
+            pendingConfirm = action;
+            openModal(modalId);
+        }
+
+        async function confirmAction(btnId, modalId) {
+            if (!pendingConfirm) return;
+            const btn = $(btnId);
+            btn.disabled = true;
+            try {
+                await pendingConfirm();
+                closeModal(modalId);
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                pendingConfirm = null;
+            }
+        }
 
         async function loadVersion() {
             try {
                 const res = await fetch('/api/version');
                 if (!res.ok) return;
                 const data = await res.json();
-                if (data.version) {
-                    document.getElementById('app-version').textContent = `v${data.version}`;
-                }
+                if (data.version) $('app-version').textContent = `v${data.version}`;
             } catch (err) {
                 console.error('Failed to load version:', err);
             }
@@ -765,10 +830,8 @@
                     fetch('/api/schedules'),
                     fetch('/api/restores')
                 ]);
-
                 const schedules = await schedulesRes.json();
                 const restores = await restoresRes.json();
-
                 renderOverview(schedules, restores);
                 renderSchedules(schedules);
                 renderRestores(restores);
@@ -791,6 +854,27 @@
             pollTimer = setTimeout(loadAllData, active ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS);
         }
 
+        // Per-schedule counts, shared by the overview and the schedule cards.
+        function summarize(schedule) {
+            const summary = schedule.status?.summary || {};
+            const total = schedule.backups?.length ?? summary.totalBackups ?? 0;
+            const healthy = summary.healthyBackups || 0;
+            const running = summary.runningBackups || 0;
+            const failed = summary.failedBackups || 0;
+            return { total, healthy, running, failed, pending: Math.max(0, total - healthy - running - failed) };
+        }
+
+        // Render non-zero counts as colored spans; `wordClass` wraps the label.
+        function countParts(parts, wordClass = '') {
+            return parts
+                .filter(([count]) => count)
+                .map(([count, label, color]) => {
+                    const word = wordClass ? `<span class="${wordClass}">${label}</span>` : ` ${label}`;
+                    return `<span style="color: var(--${color});">${count}${word}</span>`;
+                })
+                .join('');
+        }
+
         function renderOverview(schedules, restores) {
             let totalBackups = 0;
             let healthyBackups = 0;
@@ -800,80 +884,74 @@
             let suspendedBackups = 0;
 
             schedules.forEach(s => {
-                const summary = s.status?.summary || {};
-                const total = s.backups?.length ?? summary.totalBackups ?? 0;
+                const { total, healthy, running, failed, pending } = summarize(s);
                 totalBackups += total;
                 if (s.suspend) {
                     suspendedBackups += total;
                     return;
                 }
-                const healthy = summary.healthyBackups || 0;
-                const running = summary.runningBackups || 0;
-                const failed = summary.failedBackups || 0;
                 healthyBackups += healthy;
                 runningBackups += running;
                 failedBackups += failed;
-                pendingBackups += Math.max(0, total - healthy - running - failed);
+                pendingBackups += pending;
             });
 
-            const healthParts = [];
-            if (pendingBackups) healthParts.push(`<span style="color: var(--warning);">${pendingBackups}<span class="stat-word">pending</span></span>`);
-            if (runningBackups) healthParts.push(`<span style="color: var(--info);">${runningBackups}<span class="stat-word">running</span></span>`);
-            if (healthyBackups) healthParts.push(`<span style="color: var(--success);">${healthyBackups}<span class="stat-word">healthy</span></span>`);
-            if (failedBackups) healthParts.push(`<span style="color: var(--danger);">${failedBackups}<span class="stat-word">failed</span></span>`);
-            if (suspendedBackups) healthParts.push(`<span style="color: var(--text-muted);">${suspendedBackups}<span class="stat-word">suspended</span></span>`);
+            const healthParts = countParts([
+                [pendingBackups, 'pending', 'warning'],
+                [runningBackups, 'running', 'info'],
+                [healthyBackups, 'healthy', 'success'],
+                [failedBackups, 'failed', 'danger'],
+                [suspendedBackups, 'suspended', 'text-muted'],
+            ], 'stat-word');
 
-            document.getElementById('stat-schedules').textContent = schedules.length;
-            document.getElementById('stat-backups').textContent = totalBackups;
-            document.getElementById('stat-health').innerHTML = healthParts.length
-                ? healthParts.join('')
-                : '<span style="color: var(--text-faint);">0</span>';
-            document.getElementById('stat-restores').textContent = restores.length;
+            $('stat-schedules').textContent = schedules.length;
+            $('stat-backups').textContent = totalBackups;
+            $('stat-health').innerHTML = healthParts || '<span style="color: var(--text-faint);">0</span>';
+            $('stat-restores').textContent = restores.length;
+        }
+
+        function retentionText(retention) {
+            retention = retention || {};
+            const parts = [
+                ['Daily', retention.keepDaily],
+                ['Weekly', retention.keepWeekly],
+                ['Monthly', retention.keepMonthly],
+            ]
+                .filter(([, value]) => value !== undefined && value !== null && value !== '')
+                .map(([label, value]) => `${label} ${value}`);
+            return parts.length ? escapeHtml(parts.join(' · ')) : '<span class="meta-muted">Not configured</span>';
         }
 
         function renderSchedules(schedules) {
-            const container = document.getElementById('schedules-container');
+            const container = $('schedules-container');
             if (schedules.length === 0) {
                 container.innerHTML = '<div class="card empty-state">No BackupSchedules found in the cluster.</div>';
                 return;
             }
 
             container.innerHTML = schedules.map(s => {
-                const allOk = s.status?.allOk ? '✓ All OK' : '';
-                const summary = s.status?.summary || {};
-                const backupCount = (s.backups && s.backups.length) || 0;
-                const total = summary.totalBackups ?? backupCount;
-                const healthy = summary.healthyBackups ?? 0;
-                const running = summary.runningBackups ?? 0;
-                const failed = summary.failedBackups ?? 0;
-                const pending = Math.max(0, total - healthy - running - failed);
-
-                const retention = s.retention || {};
-                const retentionParts = [];
-                if (retention.keepDaily !== undefined && retention.keepDaily !== null && retention.keepDaily !== '') retentionParts.push(`Daily ${retention.keepDaily}`);
-                if (retention.keepWeekly !== undefined && retention.keepWeekly !== null && retention.keepWeekly !== '') retentionParts.push(`Weekly ${retention.keepWeekly}`);
-                if (retention.keepMonthly !== undefined && retention.keepMonthly !== null && retention.keepMonthly !== '') retentionParts.push(`Monthly ${retention.keepMonthly}`);
-
-                const backupsHtml = (s.backups && s.backups.length > 0)
-                    ? s.backups.map(b => renderBackupItem(b, s)).join('')
-                    : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
+                const { total, healthy, running, failed, pending } = summarize(s);
+                const backupCount = s.backups?.length || 0;
                 const scheduleKey = `${s.namespace}/${s.name}`;
                 const expanded = expandedSchedules.has(scheduleKey);
 
                 const scheduleText = `${escapeHtml(s.schedule || '-')}${s.time_zone ? ` <span class="meta-muted">(${escapeHtml(s.time_zone)})</span>` : ''}`;
-                const retentionText = retentionParts.length
-                    ? escapeHtml(retentionParts.join(' · '))
-                    : '<span class="meta-muted">Not configured</span>';
                 const summaryParts = [`${total} total`];
                 if (s.suspend) {
                     summaryParts.push(`<span style="color: var(--text-muted);">${total} suspended</span>`);
                 } else {
-                    if (healthy) summaryParts.push(`<span style="color: var(--success);">${healthy} healthy</span>`);
-                    if (running) summaryParts.push(`<span style="color: var(--info);">${running} running</span>`);
-                    if (failed) summaryParts.push(`<span style="color: var(--danger);">${failed} failed</span>`);
-                    if (pending) summaryParts.push(`<span style="color: var(--warning);">${pending} pending</span>`);
+                    summaryParts.push(countParts([
+                        [healthy, 'healthy', 'success'],
+                        [running, 'running', 'info'],
+                        [failed, 'failed', 'danger'],
+                        [pending, 'pending', 'warning'],
+                    ]));
                 }
-                const summaryText = summaryParts.join('<span class="meta-sep"> · </span>');
+                const summaryText = summaryParts.filter(Boolean).join('<span class="meta-sep"> · </span>');
+
+                const backupsHtml = backupCount
+                    ? s.backups.map(b => renderBackupItem(b, s)).join('')
+                    : '<div style="color: var(--text-muted); font-style: italic;">No matching PVCs found for this selector.</div>';
 
                 return `
                 <div class="card">
@@ -882,7 +960,7 @@
                             <span>${escapeHtml(s.namespace)} / ${escapeHtml(s.name)}</span>
                             ${phaseBadge(s.status?.phase)}
                             ${s.suspend ? '<span class="badge badge-pending">Suspended</span>' : ''}
-                            <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${allOk}</span>
+                            <span style="font-size: 0.8rem; font-weight: 600; color: ${s.status?.allOk ? 'var(--success)' : 'var(--text-faint)'};">${s.status?.allOk ? '✓ All OK' : ''}</span>
                         </div>
                         <div class="header-actions">
                             <div class="menu">
@@ -901,7 +979,7 @@
                         <dl class="meta-list">
                             <div class="meta-item"><dt>Schedule</dt><dd>${scheduleText}</dd></div>
                             <div class="meta-item"><dt>Repo</dt><dd><code>${escapeHtml(s.repo?.endpoint || '-')}</code></dd></div>
-                            <div class="meta-item"><dt>Retention</dt><dd>${retentionText}</dd></div>
+                            <div class="meta-item"><dt>Retention</dt><dd>${retentionText(s.retention)}</dd></div>
                             <div class="meta-item"><dt>Backups</dt><dd>${summaryText}</dd></div>
                         </dl>
 
@@ -961,7 +1039,7 @@
         }
 
         function renderRestores(restores) {
-            const container = document.getElementById('restores-container');
+            const container = $('restores-container');
             if (restores.length === 0) {
                 container.innerHTML = '<div class="empty-state">No Restore operations recorded yet.</div>';
                 return;
@@ -1006,265 +1084,110 @@
             `;
         }
 
-        async function triggerBackup(namespace, cronjobName) {
-            try {
-                showToast(`Triggering manual backup for ${cronjobName}...`, 'info');
-                const res = await fetch(`/api/cronjobs/${encodeURIComponent(namespace)}/${encodeURIComponent(cronjobName)}/trigger`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to trigger backup');
+        function triggerBackup(namespace, cronjobName) {
+            return runAction(
+                () => apiRequest(`/api/cronjobs/${enc(namespace)}/${enc(cronjobName)}/trigger`, {
+                    errorMessage: 'Failed to trigger backup',
+                }),
+                {
+                    pending: `Triggering manual backup for ${cronjobName}...`,
+                    success: (data) => showToast(`Job ${data.job_name} launched successfully!`, 'success'),
+                },
+            );
+        }
 
-                showToast(`Job ${data.job_name} launched successfully!`, 'success');
-                setTimeout(loadAllData, 2000);
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
+        function triggerScheduleBackup(namespace, scheduleName) {
+            return scheduleAction(namespace, scheduleName, 'trigger', {
+                pending: `Triggering backups for schedule ${namespace}/${scheduleName}...`,
+                errorMessage: 'Failed to trigger backups',
+            });
+        }
+
+        function disasterRecovery(namespace, scheduleName) {
+            return scheduleAction(namespace, scheduleName, 'disaster-recovery', {
+                pending: `Suspending backups and restoring ${namespace}/${scheduleName}...`,
+                errorMessage: 'Failed to start disaster recovery',
+            });
+        }
+
+        function scanSchedule(namespace, scheduleName) {
+            return scheduleAction(namespace, scheduleName, 'scan', {
+                pending: `Creating snapshot scans for ${namespace}/${scheduleName}...`,
+                errorMessage: 'Failed to start scan',
+                refresh: 3000,
+            });
+        }
+
+        function resumeSchedule(namespace, scheduleName) {
+            return scheduleAction(namespace, scheduleName, 'resume', {
+                pending: `Resuming backups for ${namespace}/${scheduleName}...`,
+                errorMessage: 'Failed to resume backups',
+            });
         }
 
         function openScheduleBackupConfirmModal(namespace, scheduleName, count) {
-            const modal = document.getElementById('confirm-schedule-backup-modal');
-            document.getElementById('confirm-schedule-backup-name').textContent = `${namespace} / ${scheduleName}`;
-            document.getElementById('confirm-schedule-backup-count').textContent = count;
-            modal.dataset.scheduleNamespace = namespace;
-            modal.dataset.scheduleName = scheduleName;
-            modal.style.display = 'flex';
-        }
-
-        function closeScheduleBackupConfirmModal() {
-            document.getElementById('confirm-schedule-backup-modal').style.display = 'none';
-        }
-
-        async function triggerScheduleBackup(namespace, scheduleName) {
-            try {
-                showToast(`Triggering backups for schedule ${namespace}/${scheduleName}...`, 'info');
-                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/trigger`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to trigger backups');
-
-                if (data.errors && data.errors.length > 0) {
-                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
-                } else {
-                    showToast(data.message, 'success');
-                }
-                setTimeout(loadAllData, 2000);
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
-        }
-
-        async function confirmTriggerScheduleBackup() {
-            const modal = document.getElementById('confirm-schedule-backup-modal');
-            const btn = document.getElementById('btn-confirm-schedule-backup');
-            btn.disabled = true;
-            try {
-                await triggerScheduleBackup(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
-                closeScheduleBackupConfirmModal();
-            } finally {
-                btn.disabled = false;
-            }
+            $('confirm-schedule-backup-name').textContent = `${namespace} / ${scheduleName}`;
+            $('confirm-schedule-backup-count').textContent = count;
+            openConfirm('confirm-schedule-backup-modal', () => triggerScheduleBackup(namespace, scheduleName));
         }
 
         function openDisasterRecoveryModal(namespace, scheduleName, count) {
-            const modal = document.getElementById('confirm-disaster-recovery-modal');
-            document.getElementById('confirm-dr-name').textContent = `${namespace} / ${scheduleName}`;
-            document.getElementById('confirm-dr-count').textContent = count;
-            modal.dataset.scheduleNamespace = namespace;
-            modal.dataset.scheduleName = scheduleName;
-            modal.style.display = 'flex';
-        }
-
-        function closeDisasterRecoveryModal() {
-            document.getElementById('confirm-disaster-recovery-modal').style.display = 'none';
-        }
-
-        async function confirmDisasterRecovery() {
-            const modal = document.getElementById('confirm-disaster-recovery-modal');
-            const btn = document.getElementById('btn-confirm-disaster-recovery');
-            btn.disabled = true;
-            try {
-                await disasterRecovery(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
-                closeDisasterRecoveryModal();
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
-        async function disasterRecovery(namespace, scheduleName) {
-            try {
-                showToast(`Suspending backups and restoring ${namespace}/${scheduleName}...`, 'info');
-                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/disaster-recovery`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to start disaster recovery');
-                if (data.errors && data.errors.length > 0) {
-                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
-                } else {
-                    showToast(data.message, 'success');
-                }
-                setTimeout(loadAllData, 2000);
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
+            $('confirm-dr-name').textContent = `${namespace} / ${scheduleName}`;
+            $('confirm-dr-count').textContent = count;
+            openConfirm('confirm-disaster-recovery-modal', () => disasterRecovery(namespace, scheduleName));
         }
 
         function openScanModal(namespace, scheduleName, count) {
-            const modal = document.getElementById('confirm-scan-modal');
-            document.getElementById('confirm-scan-name').textContent = `${namespace} / ${scheduleName}`;
-            document.getElementById('confirm-scan-count').textContent = count;
-            modal.dataset.scheduleNamespace = namespace;
-            modal.dataset.scheduleName = scheduleName;
-            modal.style.display = 'flex';
-        }
-
-        function closeScanModal() {
-            document.getElementById('confirm-scan-modal').style.display = 'none';
-        }
-
-        async function confirmScan() {
-            const modal = document.getElementById('confirm-scan-modal');
-            const btn = document.getElementById('btn-confirm-scan');
-            btn.disabled = true;
-            try {
-                await scanSchedule(modal.dataset.scheduleNamespace, modal.dataset.scheduleName);
-                closeScanModal();
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
-        async function scanSchedule(namespace, scheduleName) {
-            try {
-                showToast(`Creating snapshot scans for ${namespace}/${scheduleName}...`, 'info');
-                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/scan`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to start scan');
-                if (data.errors && data.errors.length > 0) {
-                    showToast(`${data.message} (${data.errors.length} failed)`, 'error');
-                } else {
-                    showToast(data.message, 'success');
-                }
-                setTimeout(loadAllData, 3000);
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
-        }
-
-        async function resumeSchedule(namespace, scheduleName) {
-            try {
-                showToast(`Resuming backups for ${namespace}/${scheduleName}...`, 'info');
-                const res = await fetch(`/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(scheduleName)}/resume`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to resume backups');
-                showToast(data.message, 'success');
-                setTimeout(loadAllData, 2000);
-            } catch (err) {
-                showToast(err.message, 'error');
-            }
+            $('confirm-scan-name').textContent = `${namespace} / ${scheduleName}`;
+            $('confirm-scan-count').textContent = count;
+            openConfirm('confirm-scan-modal', () => scanSchedule(namespace, scheduleName));
         }
 
         function openBackupConfirmModal(namespace, pvcName, cronjobName) {
-            document.getElementById('confirm-backup-target').textContent = `${namespace} / ${pvcName}`;
-            const modal = document.getElementById('confirm-backup-modal');
-            modal.dataset.backupNamespace = namespace;
-            modal.dataset.cronjobName = cronjobName;
-            modal.style.display = 'flex';
-        }
-
-        function closeBackupConfirmModal() {
-            document.getElementById('confirm-backup-modal').style.display = 'none';
+            $('confirm-backup-target').textContent = `${namespace} / ${pvcName}`;
+            openConfirm('confirm-backup-modal', () => triggerBackup(namespace, cronjobName));
         }
 
         function openDeleteRestoreModal(namespace, name) {
-            const modal = document.getElementById('confirm-delete-restore-modal');
-            document.getElementById('confirm-delete-restore-name').textContent = `${namespace} / ${name}`;
-            modal.dataset.restoreNamespace = namespace;
-            modal.dataset.restoreName = name;
-            modal.style.display = 'flex';
-        }
-
-        function closeDeleteRestoreModal() {
-            document.getElementById('confirm-delete-restore-modal').style.display = 'none';
-        }
-
-        async function confirmDeleteRestore() {
-            const modal = document.getElementById('confirm-delete-restore-modal');
-            const namespace = modal.dataset.restoreNamespace;
-            const name = modal.dataset.restoreName;
-            const btn = document.getElementById('btn-confirm-delete-restore');
-            btn.disabled = true;
-            try {
-                const res = await fetch(`/api/restores/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
-                    method: 'DELETE'
+            $('confirm-delete-restore-name').textContent = `${namespace} / ${name}`;
+            openConfirm('confirm-delete-restore-modal', async () => {
+                await apiRequest(`/api/restores/${enc(namespace)}/${enc(name)}`, {
+                    method: 'DELETE',
+                    errorMessage: 'Failed to delete restore',
                 });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to delete restore');
                 showToast(`Restore '${name}' deleted`, 'success');
-                closeDeleteRestoreModal();
                 loadAllData();
-            } catch (err) {
-                showToast(err.message, 'error');
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
-        async function confirmTriggerBackup() {
-            const modal = document.getElementById('confirm-backup-modal');
-            await triggerBackup(modal.dataset.backupNamespace, modal.dataset.cronjobName);
-            closeBackupConfirmModal();
+            });
         }
 
         function openRestoreModal(namespace, scheduleName, pvcName, snapId, snapTime) {
-            const modal = document.getElementById('restore-modal');
-            modal.dataset.namespace = namespace;
-            modal.dataset.scheduleName = scheduleName;
-            modal.dataset.pvcName = pvcName;
-            modal.dataset.snapshotId = snapId;
-            document.getElementById('modal-snapshot-id').textContent = snapId || 'latest';
-            document.getElementById('modal-snapshot-time').textContent = formatDateTime(snapTime) || '—';
-            document.getElementById('modal-target-ns').textContent = namespace;
-            document.getElementById('modal-target-pvc').textContent = pvcName;
-            modal.style.display = 'flex';
-        }
-
-        function closeRestoreModal() {
-            document.getElementById('restore-modal').style.display = 'none';
+            restoreTarget = { namespace, scheduleName, pvcName, snapshotId: snapId };
+            $('modal-snapshot-id').textContent = snapId || 'latest';
+            $('modal-snapshot-time').textContent = formatDateTime(snapTime) || '—';
+            $('modal-target-ns').textContent = namespace;
+            $('modal-target-pvc').textContent = pvcName;
+            openModal('restore-modal');
         }
 
         async function submitRestore(event) {
             event.preventDefault();
-            const btn = document.getElementById('btn-submit-restore');
+            const btn = $('btn-submit-restore');
             btn.disabled = true;
             btn.textContent = 'Initiating...';
 
-            const modal = document.getElementById('restore-modal');
-            const payload = {
-                namespace: modal.dataset.namespace,
-                schedule_name: modal.dataset.scheduleName,
-                pvc_name: modal.dataset.pvcName,
-                target_pvc: modal.dataset.pvcName,
-                snapshot_id: modal.dataset.snapshotId,
-            };
-
             try {
-                const res = await fetch('/api/restores', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                const data = await apiRequest('/api/restores', {
+                    body: {
+                        namespace: restoreTarget.namespace,
+                        schedule_name: restoreTarget.scheduleName,
+                        pvc_name: restoreTarget.pvcName,
+                        target_pvc: restoreTarget.pvcName,
+                        snapshot_id: restoreTarget.snapshotId,
+                    },
+                    errorMessage: 'Failed to create restore',
                 });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to create restore');
-
                 showToast(`Restore '${data.name}' initiated successfully!`, 'success');
-                closeRestoreModal();
+                closeModal('restore-modal');
                 switchTab('restores');
             } catch (err) {
                 showToast(err.message, 'error');
