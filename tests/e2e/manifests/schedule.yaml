@@ -1,0 +1,13 @@
+apiVersion: secchio.cocointhe.cloud/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: e2e-schedule
+  namespace: secchio-e2e
+spec:
+  pvc:
+    selector:
+      app: secchio-e2e
+  schedule: "59 23 * * *"
+  repo:
+    endpoint: http://garage.garage.svc.cluster.local:3900/secchio-e2e
+    secretName: restic-s3-secret

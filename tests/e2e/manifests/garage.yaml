@@ -1,0 +1,103 @@
+# In-cluster S3 for the e2e test, using Garage.
+#
+# `--single-node --default-bucket` creates the bucket and access key from the
+# GARAGE_DEFAULT_* env vars, so no separate bucket-creation Job is needed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: garage
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+  namespace: garage
+data:
+  garage.toml: |
+    metadata_dir = "/tmp/meta"
+    data_dir = "/tmp/data"
+    db_engine = "sqlite"
+
+    replication_factor = 1
+
+    rpc_bind_addr = "[::]:3901"
+    rpc_public_addr = "127.0.0.1:3901"
+    rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+    [s3_api]
+    s3_region = "us-east-1"
+    api_bind_addr = "[::]:3900"
+    root_domain = ".s3.garage.localhost"
+    public_endpoint = "http://garage.garage.svc.cluster.local:3900"
+
+    [s3_web]
+    bind_addr = "[::]:3902"
+    root_domain = ".web.garage.localhost"
+    index = "index.html"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+    admin_token = "aezv3mg8ql7XR1BDWQR9QV2DzMmchIls"
+    metrics_token = "aezv3mg8ql7XR1BDWQR9QV2DzMmchIls"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage
+  namespace: garage
+  labels:
+    app: garage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: garage
+  template:
+    metadata:
+      labels:
+        app: garage
+    spec:
+      containers:
+        - name: garage
+          image: dxflrs/garage:v2.5.0
+          command: ["/garage", "server", "--single-node", "--default-bucket"]
+          env:
+            - name: GARAGE_DEFAULT_ACCESS_KEY
+              value: e2e-secchio-access-key
+            - name: GARAGE_DEFAULT_SECRET_KEY
+              value: e2e-secchio-secret-key
+            - name: GARAGE_DEFAULT_BUCKET
+              value: secchio-e2e
+          ports:
+            - name: s3
+              containerPort: 3900
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+            - name: data
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: garage-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  namespace: garage
+spec:
+  selector:
+    app: garage
+  ports:
+    - name: s3
+      port: 3900
+      targetPort: s3

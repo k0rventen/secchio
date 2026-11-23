@@ -42,9 +42,18 @@ logger = logging.getLogger("restic")
 CACHE_DIR = "/tmp"
 
 
+def _secret_env(name: str, secret_name: str) -> V1EnvVar:
+    """An env var read from ``secret_name`` under the same key as its name."""
+    return V1EnvVar(
+        name=name,
+        value_from=V1EnvVarSource(
+            secret_key_ref=V1SecretKeySelector(name=secret_name, key=name, optional=False),
+        ),
+    )
+
+
 def build_restic_env(
     repo: S3BackendConfig,
-    secret_name: str,
     pvc_name: str,
     pvc_namespace: str,
 ) -> list[V1EnvVar]:
@@ -53,43 +62,16 @@ def build_restic_env(
     The repository path is variabilized with the PVC namespace and name to avoid
     collisions when several PVCs share one S3 bucket/prefix.
     """
-    base_repo = repo.to_restic_repo()
-    variabilized_repo = f"{base_repo}/{pvc_namespace}/{pvc_name}"
-
     return [
-        V1EnvVar(name="RESTIC_REPOSITORY", value=variabilized_repo),
+        V1EnvVar(
+            name="RESTIC_REPOSITORY",
+            value=f"{repo.to_restic_repo()}/{pvc_namespace}/{pvc_name}",
+        ),
         V1EnvVar(name="RESTIC_HOST", value="secchio"),
         V1EnvVar(name="RESTIC_CACHE_DIR", value=CACHE_DIR),
-        V1EnvVar(
-            name="RESTIC_PASSWORD",
-            value_from=V1EnvVarSource(
-                secret_key_ref=V1SecretKeySelector(
-                    name=secret_name,
-                    key="RESTIC_PASSWORD",
-                    optional=False,
-                ),
-            ),
-        ),
-        V1EnvVar(
-            name="AWS_ACCESS_KEY_ID",
-            value_from=V1EnvVarSource(
-                secret_key_ref=V1SecretKeySelector(
-                    name=secret_name,
-                    key="AWS_ACCESS_KEY_ID",
-                    optional=False,
-                ),
-            ),
-        ),
-        V1EnvVar(
-            name="AWS_SECRET_ACCESS_KEY",
-            value_from=V1EnvVarSource(
-                secret_key_ref=V1SecretKeySelector(
-                    name=secret_name,
-                    key="AWS_SECRET_ACCESS_KEY",
-                    optional=False,
-                ),
-            ),
-        ),
+        _secret_env("RESTIC_PASSWORD", repo.secret_name),
+        _secret_env("AWS_ACCESS_KEY_ID", repo.secret_name),
+        _secret_env("AWS_SECRET_ACCESS_KEY", repo.secret_name),
     ]
 
 
@@ -277,16 +259,6 @@ def parse_termination_message(message: str) -> TerminationInfo:
     return info
 
 
-def cache_volume() -> V1Volume:
-    """Scratch space for restic's local cache (the container root is read-only)."""
-    return V1Volume(name="restic-cache", empty_dir=V1EmptyDirVolumeSource())
-
-
-def cache_mount() -> V1VolumeMount:
-    """Mount point for :func:`cache_volume`."""
-    return V1VolumeMount(name="restic-cache", mount_path=CACHE_DIR)
-
-
 def build_restic_pod(
     *,
     container_name: str,
@@ -294,23 +266,29 @@ def build_restic_pod(
     env: list[V1EnvVar],
     pvc_name: str,
     read_only: bool,
+    mount_pvc: bool = True,
 ) -> V1PodSpec:
-    """Build the hardened pod spec shared by backup and restore Jobs.
+    """Build the hardened pod spec shared by backup, restore and scan Jobs.
 
     Mounts the PVC at ``/data`` (read-only for backups, read-write for restores)
     next to a writable cache volume, and applies the shared security context.
+    Scan Jobs set ``mount_pvc=False``: listing snapshots only needs the repo.
     """
-    volumes = [
-        V1Volume(
-            name=f"pvc-{pvc_name}",
-            persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=pvc_name),
-        ),
-        cache_volume(),
-    ]
-    mounts = [
-        V1VolumeMount(name=f"pvc-{pvc_name}", mount_path="/data", read_only=read_only),
-        cache_mount(),
-    ]
+    # Scratch space for restic's local cache (the container root is read-only).
+    volumes = [V1Volume(name="restic-cache", empty_dir=V1EmptyDirVolumeSource())]
+    mounts = [V1VolumeMount(name="restic-cache", mount_path=CACHE_DIR)]
+    if mount_pvc:
+        volumes.insert(
+            0,
+            V1Volume(
+                name=f"pvc-{pvc_name}",
+                persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(claim_name=pvc_name),
+            ),
+        )
+        mounts.insert(
+            0,
+            V1VolumeMount(name=f"pvc-{pvc_name}", mount_path="/data", read_only=read_only),
+        )
     container = V1Container(
         name=container_name,
         image=image,

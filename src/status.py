@@ -23,10 +23,8 @@ from common import (
     CRD_PLURAL_RESTORES,
     LABEL_PVC_NAME,
     LABEL_RESTORE,
+    LABEL_SCAN,
     LABEL_SCHEDULE,
-    extract_pvc_name,
-    extract_restore_name,
-    extract_schedule_name,
     make_cronjob_name,
     now_iso,
 )
@@ -131,11 +129,15 @@ def job_event(job: JobStatus) -> None:
     """
     if not job.namespace:
         return
-    if restore_name := extract_restore_name(job.labels):
+    if restore_name := job.labels.get(LABEL_RESTORE):
         _sync_restore_from_job(job, restore_name)
-    elif schedule_name := extract_schedule_name(job.labels):
-        pvc_name = extract_pvc_name(job.labels)
-        if pvc_name:
+    elif schedule_name := job.labels.get(LABEL_SCHEDULE):
+        pvc_name = job.labels.get(LABEL_PVC_NAME, "")
+        if not pvc_name:
+            return
+        if job.labels.get(LABEL_SCAN):
+            _sync_scan_from_job(job, schedule_name, pvc_name)
+        else:
             sync_backup_entry(schedule_name, job.namespace, pvc_name)
 
 
@@ -146,7 +148,8 @@ def sync_backup_entry(schedule_name: str, namespace: str, pvc_name: str) -> None
             jobs = k8s.get_batch_api().list_namespaced_job(
                 namespace=namespace,
                 label_selector=(
-                    f"{LABEL_SCHEDULE}={schedule_name},{LABEL_PVC_NAME}={pvc_name},!{LABEL_RESTORE}"
+                    f"{LABEL_SCHEDULE}={schedule_name},{LABEL_PVC_NAME}={pvc_name},"
+                    f"!{LABEL_RESTORE},!{LABEL_SCAN}"
                 ),
             )
         except (ApiException, OpenApiException, ValueError, OSError) as e:
@@ -186,25 +189,24 @@ def _entry_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> Backup
         pvc_name=pvc_name,
         cronjob_name=make_cronjob_name(schedule_name, pvc_name),
     )
-    if job.succeeded:
+    if job.succeeded or job.failed:
         info = extract_termination_info(job.name, job.namespace)
-        entry.phase = Phase.COMPLETED
-        entry.last_backup_time = job.completion_time or now_iso()
         entry.snapshots = info.snapshots
-        entry.message = "Backup completed successfully"
-    elif job.failed:
-        info = extract_termination_info(job.name, job.namespace)
-        entry.phase = Phase.FAILED
-        entry.last_backup_time = job.start_time or now_iso()
-        entry.snapshots = info.snapshots
-        entry.message = f"Backup failed: {_failure_reason(info, job, 'Backup job failed')}"
-        entry.reason = info.waiting_reason
+        if job.succeeded:
+            entry.phase = Phase.COMPLETED
+            entry.last_backup_time = job.completion_time or now_iso()
+            entry.message = "Backup completed successfully"
+        else:
+            entry.phase = Phase.FAILED
+            entry.last_backup_time = job.start_time or now_iso()
+            entry.message = f"Backup failed: {_failure_reason(info, job, 'Backup job failed')}"
+            entry.reason = info.waiting_reason
     elif job.active:
         # A Job whose pod cannot start (e.g. CreateContainerConfigError for a
         # missing Secret) stays active forever, so the Job status alone looks like
         # a running backup. Surface the pod's blocking state instead.
-        blocker = extract_pod_blocker(job.name, job.namespace)
-        if blocker.waiting_reason or blocker.error:
+        blocker = _pod_blocker(job)
+        if blocker is not None:
             entry.phase = Phase.FAILED
             entry.last_backup_time = job.start_time or now_iso()
             entry.message = f"Backup failed: {_failure_reason(blocker, job, 'Pod failed to start')}"
@@ -258,6 +260,12 @@ def _merge_entry(existing: BackupEntry, new: BackupEntry) -> BackupEntry:
     return new.model_copy(update={"snapshots": existing.snapshots})
 
 
+def _pod_blocker(job: JobStatus) -> TerminationInfo | None:
+    """The pod state blocking an active Job, or ``None`` while it is progressing."""
+    blocker = extract_pod_blocker(job.name, job.namespace)
+    return blocker if blocker.waiting_reason or blocker.error else None
+
+
 def _failure_reason(info: TerminationInfo, job: JobStatus, fallback: str) -> str:
     """The most specific failure reason available for a failed Job."""
     if info.error:
@@ -269,6 +277,29 @@ def _failure_reason(info: TerminationInfo, job: JobStatus, fallback: str) -> str
     if info.waiting_reason:
         return info.waiting_reason
     return job.failure_reason or fallback
+
+
+def _sync_scan_from_job(job: JobStatus, schedule_name: str, pvc_name: str) -> None:
+    """Refresh one schedule entry's snapshot list from a scan Job.
+
+    A scan only lists snapshots; it must not change the entry's phase or last
+    backup time.
+    """
+    if not job.succeeded:
+        return
+    info = extract_termination_info(job.name, job.namespace)
+    if not info.snapshots:
+        return
+    with schedule_lock(job.namespace, schedule_name):
+        item = k8s.get_backup_schedule(k8s.get_custom_objects_api(), schedule_name, job.namespace)
+        if item is None:
+            return
+        schedule = BackupSchedule.from_crd(item)
+        entry = next((e for e in schedule.status.backups if e.pvc_name == pvc_name), None)
+        if entry is None:
+            return
+        entry.snapshots = info.snapshots
+        _patch_schedule_entry(schedule_name, job.namespace, entry)
 
 
 def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
@@ -292,8 +323,8 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
             message=f"Restore failed: {reason}",
         )
     elif job.active:
-        blocker = extract_pod_blocker(job.name, job.namespace)
-        if blocker.waiting_reason or blocker.error:
+        blocker = _pod_blocker(job)
+        if blocker is not None:
             status = RestoreStatus(
                 phase=Phase.FAILED,
                 completion_time=now_iso(),
@@ -323,14 +354,7 @@ def aggregate_schedule_status(entries: Iterable[BackupEntry]) -> BackupScheduleS
     """Compute the schedule-level status from its per-PVC entries."""
     entries = list(entries)
     if not entries:
-        return BackupScheduleStatus(
-            phase=SchedulePhase.PENDING,
-            all_ok=False,
-            last_backup_time="",
-            message="No matching PVCs or backups found",
-            summary=BackupScheduleSummary(),
-            backups=[],
-        )
+        return BackupScheduleStatus(message="No matching PVCs or backups found")
 
     total = len(entries)
     healthy = sum(1 for entry in entries if entry.phase == Phase.COMPLETED)

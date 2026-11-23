@@ -271,16 +271,16 @@ def list_pvcs_by_selector(
     return [p.metadata.name for p in pvcs.items if p.metadata and p.metadata.name]
 
 
-def list_backup_schedules(api: CustomObjectsApi) -> list[dict[str, Any]]:
-    """List all BackupSchedule custom resources across all namespaces."""
+def list_custom_objects(api: CustomObjectsApi, plural: str) -> list[dict[str, Any]]:
+    """List a custom resource across all namespaces, or ``[]`` on failure."""
     try:
-        result: Any = api.list_custom_object_for_all_namespaces(
+        result: Any = api.list_cluster_custom_object(
             group=CRD_GROUP,
             version=CRD_VERSION,
-            resource_plural=CRD_PLURAL_BACKUPSCHEDULES,
+            plural=plural,
         )
     except ApiException:
-        logger.exception("Failed to list %s", CRD_PLURAL_BACKUPSCHEDULES)
+        logger.exception("Failed to list %s", plural)
         return []
     items = result.get("items", []) if isinstance(result, dict) else []
     return [item for item in items if isinstance(item, dict)]

@@ -27,6 +27,7 @@ from common import (
     JOB_TTL_SECONDS,
     make_cronjob_labels,
     make_restore_labels,
+    make_scan_labels,
 )
 from crds import RetentionConfig, S3BackendConfig
 from k8s import owner_reference
@@ -41,7 +42,6 @@ class WorkloadConfig:
     namespace: str
     pvc_name: str
     repo: S3BackendConfig
-    secret_name: str
     image: str
     mode: str
     schedule: str = ""
@@ -57,9 +57,14 @@ class WorkloadConfig:
 
 
 def _pod(
-    config: WorkloadConfig, *, container_name: str, read_only: bool, pvc_name: str
+    config: WorkloadConfig,
+    *,
+    container_name: str,
+    read_only: bool,
+    pvc_name: str,
+    mount_pvc: bool = True,
 ) -> V1PodSpec:
-    env = build_restic_env(config.repo, config.secret_name, config.pvc_name, config.namespace)
+    env = build_restic_env(config.repo, config.pvc_name, config.namespace)
     env += entrypoint_env(
         config.mode,
         insecure_tls=config.repo.insecure_tls,
@@ -72,6 +77,7 @@ def _pod(
         env=env,
         pvc_name=pvc_name,
         read_only=read_only,
+        mount_pvc=mount_pvc,
     )
 
 
@@ -127,15 +133,8 @@ def create_cronjob(config: WorkloadConfig) -> V1CronJob:
     )
 
 
-def create_restore_job(config: WorkloadConfig) -> V1Job:
-    """Build the one-off Job that restores a snapshot into a PVC."""
-    labels = make_restore_labels(config.owner_name, config.schedule_name, config.pvc_name)
-    pod_spec = _pod(
-        config,
-        container_name="restic-restore",
-        read_only=False,
-        pvc_name=config.target_pvc or config.pvc_name,
-    )
+def _job(config: WorkloadConfig, labels: dict[str, str], pod_spec: V1PodSpec) -> V1Job:
+    """A one-off Job wrapping ``pod_spec`` with the shared Job settings."""
     return V1Job(
         api_version="batch/v1",
         kind="Job",
@@ -154,3 +153,28 @@ def create_restore_job(config: WorkloadConfig) -> V1Job:
             ),
         ),
     )
+
+
+def create_scan_job(config: WorkloadConfig) -> V1Job:
+    """Build the one-off Job that lists a PVC's snapshots in the restic repo."""
+    labels = make_scan_labels(config.schedule_name, config.pvc_name)
+    pod_spec = _pod(
+        config,
+        container_name="restic-scan",
+        read_only=True,
+        pvc_name=config.pvc_name,
+        mount_pvc=False,
+    )
+    return _job(config, labels, pod_spec)
+
+
+def create_restore_job(config: WorkloadConfig) -> V1Job:
+    """Build the one-off Job that restores a snapshot into a PVC."""
+    labels = make_restore_labels(config.owner_name, config.schedule_name, config.pvc_name)
+    pod_spec = _pod(
+        config,
+        container_name="restic-restore",
+        read_only=False,
+        pvc_name=config.target_pvc or config.pvc_name,
+    )
+    return _job(config, labels, pod_spec)

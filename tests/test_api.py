@@ -103,6 +103,22 @@ def test_set_suspend_patches_spec_and_cronjobs() -> None:
     )
 
 
+def test_scan_schedule_creates_jobs() -> None:
+    with (
+        mock.patch.object(api, "get_custom_objects_api", return_value=mock.Mock()),
+        mock.patch.object(api, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(api, "_create_scan_job", side_effect=["j1", "j2"]) as create_scan,
+    ):
+        result = asyncio.run(api.scan_schedule("ns", "sched"))
+
+    assert create_scan.call_count == 2
+    assert result["triggered"] == [
+        {"pvc": "data", "job_name": "j1"},
+        {"pvc": "logs", "job_name": "j2"},
+    ]
+    assert result["errors"] == []
+
+
 def test_disaster_recovery_suspends_and_creates_restores() -> None:
     with (
         mock.patch.object(api, "get_custom_objects_api", return_value=mock.Mock()),
@@ -173,7 +189,7 @@ def test_schedule_views_include_suspend() -> None:
     item["spec"]["suspend"] = True
     with (
         mock.patch.object(api, "get_custom_objects_api", return_value=mock.Mock()),
-        mock.patch.object(api, "list_backup_schedules", return_value=[item]),
+        mock.patch.object(api, "list_custom_objects", return_value=[item]),
     ):
         views = api._schedule_views()
 
