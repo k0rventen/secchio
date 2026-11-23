@@ -42,7 +42,7 @@ RUN adduser app -SD -h /app -u 1000
 COPY --from=builder --chown=1000:1000 /app /app
 
 # precompile the project's venv and the stdlib to .pyc (this results in a 20MB gain in compressed size, but a 4x speedup on startup)
-RUN python -c "import compileall, sysconfig; compileall.compile_dir(sysconfig.get_paths()['stdlib']); compileall.compile_dir('/app/.venv/lib/python3.15/');"
+RUN python -c "import compileall, sysconfig; compileall.compile_dir(sysconfig.get_paths()['stdlib']); compileall.compile_dir('/app/.venv/lib/python3.15/');" > /dev/null
 
 # install code
 WORKDIR /app
