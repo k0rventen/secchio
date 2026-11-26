@@ -13,18 +13,15 @@ import re
 from dataclasses import dataclass, field
 
 from kubernetes.client import (
-    V1Capabilities,
     V1Container,
     V1EmptyDirVolumeSource,
     V1EnvVar,
     V1EnvVarSource,
     V1PersistentVolumeClaimVolumeSource,
     V1Pod,
-    V1PodSecurityContext,
     V1PodSpec,
     V1PodStatus,
     V1ResourceRequirements,
-    V1SeccompProfile,
     V1SecretKeySelector,
     V1SecurityContext,
     V1Volume,
@@ -308,30 +305,10 @@ def build_restic_pod(
         restart_policy="OnFailure",
         containers=[container],
         volumes=volumes,
-        security_context=pod_security_context(),
         automount_service_account_token=False,
         enable_service_links=False,
     )
 
 
-def pod_security_context() -> V1PodSecurityContext:
-    """Pod-level hardening shared by the backup and restore pods."""
-    return V1PodSecurityContext(seccomp_profile=V1SeccompProfile(type="RuntimeDefault"))
-
-
 def container_security_context() -> V1SecurityContext:
-    """Container hardening for a restic pod.
-
-    The pod still runs as root, because restic must read the whole volume — but it
-    drops every capability and adds back only ``DAC_OVERRIDE``, the one capability
-    root needs to bypass file permissions and read (or overwrite) arbitrary files.
-    ``DAC_OVERRIDE`` is chosen over the narrower ``DAC_READ_SEARCH`` because it is
-    part of the Pod Security Standard *baseline* default capability set, so these
-    pods stay admissible in baseline-enforcing namespaces. The root filesystem is
-    read-only, so restic's cache is redirected to :data:`CACHE_DIR`.
-    """
-    return V1SecurityContext(
-        allow_privilege_escalation=False,
-        read_only_root_filesystem=True,
-        capabilities=V1Capabilities(drop=["ALL"], add=["DAC_OVERRIDE"]),
-    )
+    return V1SecurityContext(read_only_root_filesystem=True)
