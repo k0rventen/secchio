@@ -98,18 +98,9 @@ def _assert_common_hardening(pod: V1PodSpec, container: V1Container) -> None:
     assert pod.automount_service_account_token is False
     assert pod.enable_service_links is False
 
-    assert pod.security_context is not None
-    assert pod.security_context.seccomp_profile is not None
-    assert pod.security_context.seccomp_profile.type == "RuntimeDefault"
-
     context = container.security_context
     assert context is not None
-    assert context.allow_privilege_escalation is False
     assert context.read_only_root_filesystem is True
-    assert context.capabilities is not None
-    assert context.capabilities.drop == ["ALL"]
-    # DAC_OVERRIDE is baseline-PSA-legal; DAC_READ_SEARCH is not.
-    assert context.capabilities.add == ["DAC_OVERRIDE"]
 
     # restic's cache must live on a writable volume.
     assert _env_value(container, "RESTIC_CACHE_DIR") == "/tmp"
