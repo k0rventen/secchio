@@ -17,10 +17,13 @@ import status
 from common import (
     CRD_PLURAL_RESTORES,
     REASON_CRONJOB_REJECTED,
+    RESTIC_DEFAULT_SPREAD_SECONDS,
     RESTIC_IMAGE,
+    RESTIC_RESOURCES,
     make_cronjob_name,
     make_restore_job_name,
     now_iso,
+    spread_delay_seconds,
 )
 from crds import (
     BackupEntry,
@@ -45,6 +48,9 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
     schedule_spec = BackupScheduleSpec.model_validate(spec)
     matched = k8s.list_pvcs_by_selector(k8s.get_core_api(), schedule_spec.pvc.selector, namespace)
     logger.info("Schedule %s in %s: %d PVCs match selector", name, namespace, len(matched))
+    spread_seconds = (
+        schedule_spec.spread_seconds or RESTIC_DEFAULT_SPREAD_SECONDS
+    )
 
     live = {
         cronjob.metadata.name
@@ -76,6 +82,8 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
                 repo=schedule_spec.repo,
                 image=RESTIC_IMAGE,
                 mode="backup",
+                resources=RESTIC_RESOURCES,
+                start_delay_seconds=spread_delay_seconds(name, pvc_name, spread_seconds),
                 schedule=schedule_spec.schedule,
                 time_zone=schedule_spec.time_zone,
                 suspend=schedule_spec.suspend,
@@ -153,6 +161,7 @@ def restore(name: str, namespace: str, spec: dict[str, Any], meta: dict[str, Any
         repo=schedule_cr.spec.repo,
         image=RESTIC_IMAGE,
         mode="restore",
+        resources=RESTIC_RESOURCES,
         snapshot_id=restore_spec.snapshot_id,
         target_pvc=restore_spec.target_pvc or restore_spec.pvc_name,
         schedule_name=restore_spec.schedule_name,

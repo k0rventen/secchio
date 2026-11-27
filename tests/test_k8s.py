@@ -15,6 +15,7 @@ from kubernetes.client import (
     V1ObjectMeta,
     V1PodSpec,
     V1PodTemplateSpec,
+    V1ResourceRequirements,
 )
 from kubernetes.client.exceptions import ApiException
 
@@ -93,6 +94,61 @@ def _cronjob(schedule: str = "0 2 * * *") -> V1CronJob:
                 )
             ),
         ),
+    )
+
+
+def _set_resources(cronjob: V1CronJob, resources: V1ResourceRequirements) -> None:
+    spec = cronjob.spec
+    assert spec is not None and spec.job_template is not None
+    job_spec = spec.job_template.spec
+    assert job_spec is not None and job_spec.template is not None
+    pod_spec = job_spec.template.spec
+    assert pod_spec is not None and pod_spec.containers
+    pod_spec.containers[0].resources = resources
+
+
+def test_create_or_update_cronjob_ignores_equivalent_quantities() -> None:
+    desired = _cronjob()
+    live = _cronjob()
+    # The API server canonicalizes 1000m to 1 and 128Mi to 134217728.
+    _set_resources(
+        desired,
+        V1ResourceRequirements(
+            requests={"cpu": "1000m", "memory": "128Mi"},
+            limits={"cpu": "1", "memory": "512Mi"},
+        ),
+    )
+    _set_resources(
+        live,
+        V1ResourceRequirements(
+            requests={"cpu": "1", "memory": "134217728"},
+            limits={"cpu": "1000m", "memory": "536870912"},
+        ),
+    )
+
+    batch = mock.Mock()
+    batch.create_namespaced_cron_job.side_effect = ApiException(status=409)
+    batch.read_namespaced_cron_job.return_value = live
+
+    k8s.create_or_update_cronjob(batch, desired)
+
+    batch.replace_namespaced_cron_job.assert_not_called()
+
+
+def test_create_or_update_cronjob_replaces_on_resource_drift() -> None:
+    desired = _cronjob()
+    live = _cronjob()
+    _set_resources(desired, V1ResourceRequirements(limits={"cpu": "1"}))
+    _set_resources(live, V1ResourceRequirements(limits={"cpu": "2"}))
+
+    batch = mock.Mock()
+    batch.create_namespaced_cron_job.side_effect = ApiException(status=409)
+    batch.read_namespaced_cron_job.return_value = live
+
+    k8s.create_or_update_cronjob(batch, desired)
+
+    batch.replace_namespaced_cron_job.assert_called_once_with(
+        name="bk-cronjob", namespace="ns", body=desired
     )
 
 

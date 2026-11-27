@@ -10,6 +10,10 @@ from workloads import WorkloadConfig, create_cronjob, create_restore_job, create
 
 REPO = S3BackendConfig(endpoint="minio/bucket", secret_name="creds")
 IMAGE = "restic/restic:latest"
+RESOURCES = {
+    "requests": {"cpu": "100m", "memory": "128Mi"},
+    "limits": {"cpu": "1", "memory": "512Mi"},
+}
 
 
 def _backup_config() -> WorkloadConfig:
@@ -20,6 +24,7 @@ def _backup_config() -> WorkloadConfig:
         repo=REPO,
         image=IMAGE,
         mode="backup",
+        resources=RESOURCES,
         schedule="* * * * *",
         time_zone="Europe/Brussels",
         retention=RetentionConfig(keep_daily=1),
@@ -38,6 +43,7 @@ def _scan_config() -> WorkloadConfig:
         repo=REPO,
         image=IMAGE,
         mode="scan",
+        resources=RESOURCES,
         schedule_name="sched",
         owner_kind="BackupSchedule",
         owner_name="sched",
@@ -53,6 +59,7 @@ def _restore_config() -> WorkloadConfig:
         repo=REPO,
         image=IMAGE,
         mode="restore",
+        resources=RESOURCES,
         snapshot_id="abc123",
         target_pvc="target",
         schedule_name="sched",
@@ -62,8 +69,8 @@ def _restore_config() -> WorkloadConfig:
     )
 
 
-def _backup_pod() -> V1PodSpec:
-    cronjob = create_cronjob(_backup_config())
+def _backup_pod(config: WorkloadConfig | None = None) -> V1PodSpec:
+    cronjob = create_cronjob(config or _backup_config())
     spec = cronjob.spec
     assert spec is not None and spec.job_template is not None
     job_template = spec.job_template.spec
@@ -154,9 +161,27 @@ def test_backup_cronjob_spec_and_env() -> None:
     assert _env_value(container, "SECCHIO_MODE") == "backup"
     assert _env_value(container, "SECCHIO_RETENTION") == "--keep-daily 1"
 
-    # Canonical quantities: the API server stores 1000m as 1.
     assert container.resources is not None
-    assert container.resources.limits == {"cpu": "1", "memory": "512Mi"}
+    assert container.resources.requests == RESOURCES["requests"]
+    assert container.resources.limits == RESOURCES["limits"]
+
+
+def test_pod_without_resources_omits_them() -> None:
+    config = _backup_config()
+    config.resources = None
+
+    assert _container(_backup_pod(config)).resources is None
+
+
+def test_backup_pod_includes_start_delay() -> None:
+    config = _backup_config()
+    config.start_delay_seconds = 42
+
+    assert _env_value(_container(_backup_pod(config)), "SECCHIO_START_DELAY") == "42"
+
+
+def test_restore_pod_has_no_start_delay() -> None:
+    assert _env_value(_container(_restore_pod()), "SECCHIO_START_DELAY") is None
 
 
 def test_backup_cronjob_suspend_flag() -> None:

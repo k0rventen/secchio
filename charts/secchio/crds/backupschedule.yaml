@@ -81,6 +81,14 @@ spec:
                     IANA timezone name for the schedule (e.g. Europe/Brussels).
                     Defaults to the controller's timezone (UTC) when omitted.
                   pattern: '^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+)*$'
+                spreadSeconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 3600
+                  description: >-
+                    Maximum random delay (in seconds) before a scheduled backup
+                    starts, used to spread concurrent backups. Defaults to the
+                    operator's configured value; set to 0 to disable.
                 repo:
                   type: object
                   required:

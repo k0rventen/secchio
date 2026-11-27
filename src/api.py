@@ -28,6 +28,7 @@ from common import (
     LABEL_SCHEDULE,
     OPERATOR_VERSION,
     RESTIC_IMAGE,
+    RESTIC_RESOURCES,
     make_cronjob_name,
     make_restore_labels,
 )
@@ -166,6 +167,11 @@ def _trigger_backup_job(namespace: str, cronjob_name: str) -> str:
     if template is None or template.spec is None:
         raise HTTPException(status_code=500, detail="CronJob template spec is missing")
     job_spec = template.spec
+    pod_spec = job_spec.template.spec if job_spec.template else None
+    for container in (pod_spec.containers if pod_spec else None) or []:
+        for env in container.env or []:
+            if env.name == "SECCHIO_START_DELAY":
+                env.value = "0"
 
     # Kubernetes names are capped at 63 characters.
     manual_job_name = f"{cronjob_name[:40]}-manual-{int(time.time())}"
@@ -247,6 +253,7 @@ def _create_scan_job(
         repo=schedule.spec.repo,
         image=RESTIC_IMAGE,
         mode="scan",
+        resources=RESTIC_RESOURCES,
         schedule_name=schedule_name,
         owner_kind="BackupSchedule",
         owner_name=schedule_name,

@@ -13,3 +13,14 @@ operator:
 restic:
   image: ghcr.io/k0rventen/secchio-restic
   tag: v0.11.2
+  # Default window (seconds) over which scheduled backups are spread. Keep it
+  # below your schedule interval; a schedule's spec.spreadSeconds overrides it.
+  defaultSpreadSeconds: 300
+  # Requests/limits for every restic pod (backup, restore, scan).
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 200Mi

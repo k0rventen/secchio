@@ -78,6 +78,7 @@ def entrypoint_env(
     insecure_tls: bool = False,
     retention: RetentionConfig | None = None,
     snapshot_id: str = "",
+    start_delay_seconds: int = 0,
 ) -> list[V1EnvVar]:
     """Environment that configures the restic image's entrypoint.
 
@@ -91,6 +92,8 @@ def entrypoint_env(
         env.append(V1EnvVar(name="SECCHIO_RETENTION", value=" ".join(args)))
     if snapshot_id:
         env.append(V1EnvVar(name="SECCHIO_SNAPSHOT", value=snapshot_id))
+    if start_delay_seconds > 0:
+        env.append(V1EnvVar(name="SECCHIO_START_DELAY", value=str(start_delay_seconds)))
     return env
 
 
@@ -263,13 +266,16 @@ def build_restic_pod(
     env: list[V1EnvVar],
     pvc_name: str,
     read_only: bool,
+    resources: dict[str, dict[str, str]] | None = None,
     mount_pvc: bool = True,
 ) -> V1PodSpec:
     """Build the hardened pod spec shared by backup, restore and scan Jobs.
 
     Mounts the PVC at ``/data`` (read-only for backups, read-write for restores)
     next to a writable cache volume, and applies the shared security context.
-    Scan Jobs set ``mount_pvc=False``: listing snapshots only needs the repo.
+    ``resources`` is the operator-wide restic resource config (from the chart);
+    when omitted, the container has no requests/limits. Scan Jobs set
+    ``mount_pvc=False``: listing snapshots only needs the repo.
     """
     # Scratch space for restic's local cache (the container root is read-only).
     volumes = [V1Volume(name="restic-cache", empty_dir=V1EmptyDirVolumeSource())]
@@ -294,11 +300,15 @@ def build_restic_pod(
         security_context=container_security_context(),
         termination_message_path="/dev/termination-log",
         termination_message_policy="FallbackToLogsOnError",
-        # Resource quantities must be in canonical form: the API server stores
-        # ``1000m`` as ``1``, and the CronJob drift check compares the live spec.
-        resources=V1ResourceRequirements(
-            requests={"cpu": "100m", "memory": "128Mi"},
-            limits={"cpu": "1", "memory": "512Mi"},
+        # The drift check compares quantities numerically, so the chart can use
+        # any valid Kubernetes quantity format (e.g. ``1000m``).
+        resources=(
+            V1ResourceRequirements(
+                requests=resources.get("requests"),
+                limits=resources.get("limits"),
+            )
+            if resources
+            else None
         ),
     )
     return V1PodSpec(

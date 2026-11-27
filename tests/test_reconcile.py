@@ -38,6 +38,26 @@ def _cronjob(name: str):
     return mock.Mock(metadata=SimpleNamespace(name=name))
 
 
+def test_schedule_spreads_backup_start() -> None:
+    spec = {**SCHEDULE_SPEC, "spreadSeconds": 300}
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
+        mock.patch.object(reconcile.status, "reconcile_schedule_status"),
+    ):
+        reconcile.schedule(name="sched", namespace="ns", spec=spec, uid="uid")
+
+    cronjob = create.call_args.args[1]
+    container = cronjob.spec.job_template.spec.template.spec.containers[0]
+    env = {e.name: e.value for e in container.env}
+    assert 0 <= int(env["SECCHIO_START_DELAY"]) < 300
+
+
 def test_schedule_creates_cronjob_for_matching_pvc() -> None:
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),

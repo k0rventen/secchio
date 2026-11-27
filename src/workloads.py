@@ -44,6 +44,8 @@ class WorkloadConfig:
     repo: S3BackendConfig
     image: str
     mode: str
+    resources: dict[str, dict[str, str]] | None = None
+    start_delay_seconds: int = 0
     schedule: str = ""
     time_zone: str = ""
     suspend: bool = False
@@ -70,6 +72,7 @@ def _pod(
         insecure_tls=config.repo.insecure_tls,
         retention=config.retention,
         snapshot_id=config.snapshot_id,
+        start_delay_seconds=config.start_delay_seconds,
     )
     return build_restic_pod(
         container_name=container_name,
@@ -77,6 +80,7 @@ def _pod(
         env=env,
         pvc_name=pvc_name,
         read_only=read_only,
+        resources=config.resources,
         mount_pvc=mount_pvc,
     )
 

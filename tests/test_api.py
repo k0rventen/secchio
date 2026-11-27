@@ -8,11 +8,14 @@ from unittest import mock
 
 import pytest
 from kubernetes.client import (
+    V1Container,
     V1CronJob,
     V1CronJobSpec,
+    V1EnvVar,
     V1JobSpec,
     V1JobTemplateSpec,
     V1ObjectMeta,
+    V1PodSpec,
     V1PodTemplateSpec,
 )
 
@@ -56,6 +59,39 @@ def test_manual_backup_job_gets_ttl() -> None:
 
     created = batch.create_namespaced_job.call_args.kwargs["body"]
     assert created.spec.ttl_seconds_after_finished == JOB_TTL_SECONDS
+
+
+def test_manual_backup_job_clears_start_delay() -> None:
+    cronjob = V1CronJob(
+        metadata=V1ObjectMeta(name="bk-cronjob", namespace="ns"),
+        spec=V1CronJobSpec(
+            schedule="0 2 * * *",
+            job_template=V1JobTemplateSpec(
+                spec=V1JobSpec(
+                    template=V1PodTemplateSpec(
+                        spec=V1PodSpec(
+                            containers=[
+                                V1Container(
+                                    name="restic-backup",
+                                    env=[V1EnvVar(name="SECCHIO_START_DELAY", value="42")],
+                                )
+                            ]
+                        )
+                    )
+                )
+            ),
+        ),
+    )
+    batch = mock.Mock()
+    batch.read_namespaced_cron_job.return_value = cronjob
+    batch.create_namespaced_job.side_effect = lambda *, namespace, body: body
+
+    with mock.patch.object(api, "get_batch_api", return_value=batch):
+        api._trigger_backup_job("ns", "bk-cronjob")
+
+    created = batch.create_namespaced_job.call_args.kwargs["body"]
+    container = created.spec.template.spec.containers[0]
+    assert {e.name: e.value for e in container.env}["SECCHIO_START_DELAY"] == "0"
 
 
 def test_manual_backup_refused_when_suspended() -> None:
