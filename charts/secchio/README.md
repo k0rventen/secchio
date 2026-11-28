@@ -33,7 +33,7 @@ The chart is published as an OCI artifact on GHCR:
 ```sh
 helm install secchio-operator oci://ghcr.io/k0rventen/secchio \
   --create-namespace --namespace secchio-system \
-  --version 0.11.2
+  --version 0.12.0
 ```
 
 The CRDs are bundled in `crds/` and are installed automatically on the first install.
@@ -77,6 +77,8 @@ helm uninstall secchio-operator -n secchio-system
 | `operator.tag` | Operator container image tag | `v0.7.2` |
 | `restic.image` | restic workload image repository | `ghcr.io/k0rventen/secchio-restic` |
 | `restic.tag` | restic workload image tag | `v0.7.2` |
+| `restic.resources` | Requests/limits for every restic pod (backup, restore, scan) | `requests: 50m/100Mi`, `limits: 500m/200Mi` |
+| `restic.defaultSpreadSeconds` | Default window (seconds) over which scheduled backups are spread; `spec.spreadSeconds` overrides it | `300` |
 
 ## Usage
 

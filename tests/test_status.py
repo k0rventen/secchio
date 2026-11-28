@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from unittest import mock
 
 import status
@@ -19,6 +20,16 @@ from status import JobStatus
 
 def _aggregate(entries: list[BackupEntry]) -> BackupScheduleStatus:
     return status.aggregate_schedule_status(entries)
+
+
+def test_schedule_lock_is_evicted_once_unused() -> None:
+    lock = status.schedule_lock("ns", "evict-test")
+    assert "ns/evict-test" in status._locks
+
+    del lock
+    gc.collect()
+
+    assert "ns/evict-test" not in status._locks
 
 
 def test_schedule_status_healthy() -> None:

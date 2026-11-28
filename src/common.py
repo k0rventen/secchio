@@ -2,12 +2,37 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import UTC, datetime
+
+
+def _parse_restic_resources(raw: str) -> dict[str, dict[str, str]]:
+    """Parse the chart's ``restic.resources`` JSON, coercing quantities to strings.
+
+    Helm's ``toJson`` renders unquoted YAML numbers (``cpu: 1``) as JSON numbers,
+    while the Kubernetes client requires quantity strings.
+    """
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        section: {name: str(value) for name, value in quantities.items()}
+        for section, quantities in parsed.items()
+        if isinstance(quantities, dict)
+    }
+
 
 # Operator configuration (set from the Helm chart as env vars)
 RESTIC_IMAGE = os.environ.get("RESTIC_IMAGE", "ghcr.io/k0rventen/secchio-restic:latest")
 OPERATOR_VERSION = os.environ.get("OPERATOR_VERSION", "dev")
+# Requests/limits for every restic pod (backup, restore, scan). The chart renders
+# `restic.resources` into this JSON env var; an empty object means "unset".
+RESTIC_RESOURCES = _parse_restic_resources(os.environ.get("RESTIC_RESOURCES", "{}"))
+# Default window (seconds) over which scheduled backups are spread. A schedule's
+# `spec.spreadSeconds` overrides it; 0 disables the spread.
+RESTIC_DEFAULT_SPREAD_SECONDS = int(os.environ.get("RESTIC_DEFAULT_SPREAD_SECONDS", "0"))
 
 # CRD Schema Constants
 CRD_GROUP = "secchio.cocointhe.cloud"
@@ -76,12 +101,20 @@ def make_restore_labels(restore_name: str, schedule_name: str, pvc_name: str) ->
 
 def make_scan_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
     """Generate standard labels for a snapshot-scan Job."""
-    return {
-        **_base_labels(),
-        LABEL_SCHEDULE: schedule_name,
-        LABEL_PVC_NAME: pvc_name,
-        LABEL_SCAN: "true",
-    }
+    return {**make_cronjob_labels(schedule_name, pvc_name), LABEL_SCAN: "true"}
+
+
+# Scheduling helpers
+def spread_delay_seconds(schedule_name: str, pvc_name: str, spread_seconds: int) -> int:
+    """A stable per-PVC start delay in ``[0, spread_seconds)``.
+
+    Hashing the schedule/PVC pair keeps the offset stable across reconciles and
+    retries while spreading different PVCs across the window.
+    """
+    if spread_seconds <= 0:
+        return 0
+    digest = hashlib.sha256(f"{schedule_name}/{pvc_name}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % spread_seconds
 
 
 def now_iso() -> str:

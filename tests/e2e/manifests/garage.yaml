@@ -1,7 +1,4 @@
-# In-cluster S3 for the e2e test, using Garage.
-#
-# `--single-node --default-bucket` creates the bucket and access key from the
-# GARAGE_DEFAULT_* env vars, so no separate bucket-creation Job is needed.
+# In-cluster S3
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -14,31 +11,16 @@ metadata:
   namespace: garage
 data:
   garage.toml: |
-    metadata_dir = "/tmp/meta"
-    data_dir = "/tmp/data"
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
     db_engine = "sqlite"
-
     replication_factor = 1
-
     rpc_bind_addr = "[::]:3901"
-    rpc_public_addr = "127.0.0.1:3901"
-    rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
     [s3_api]
-    s3_region = "us-east-1"
+    s3_region = "garage"
     api_bind_addr = "[::]:3900"
-    root_domain = ".s3.garage.localhost"
-    public_endpoint = "http://garage.garage.svc.cluster.local:3900"
-
-    [s3_web]
-    bind_addr = "[::]:3902"
-    root_domain = ".web.garage.localhost"
-    index = "index.html"
-
     [admin]
     api_bind_addr = "[::]:3903"
-    admin_token = "aezv3mg8ql7XR1BDWQR9QV2DzMmchIls"
-    metrics_token = "aezv3mg8ql7XR1BDWQR9QV2DzMmchIls"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -59,7 +41,7 @@ spec:
     spec:
       containers:
         - name: garage
-          image: dxflrs/garage:v2.5.0
+          image: dxflrs/garage:v2.6.0
           command: ["/garage", "server", "--single-node", "--default-bucket"]
           env:
             - name: GARAGE_DEFAULT_ACCESS_KEY
@@ -68,9 +50,15 @@ spec:
               value: e2e-secchio-secret-key
             - name: GARAGE_DEFAULT_BUCKET
               value: secchio-e2e
+            - name: GARAGE_RPC_SECRET
+              value: ed5485f411360adc02540f87fa6d75fba1519231563828090b2c497d31559ec4
+            - name: GARAGE_ADMIN_TOKEN
+              value: KlWZtREVh3SB
           ports:
             - name: s3
               containerPort: 3900
+            - name: admin
+              containerPort: 3903
           readinessProbe:
             tcpSocket:
               port: s3
@@ -101,3 +89,6 @@ spec:
     - name: s3
       port: 3900
       targetPort: s3
+    - name: admin
+      port: 3903
+      targetPort: admin

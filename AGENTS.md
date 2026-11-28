@@ -33,6 +33,7 @@ This is a Kubernetes backup operator built with Python and kopf. It uses restic 
 - Retention runs in the same Job as the backup (no secondary pod)
 - The backup/restore pods run the `restic-pod/` image. The operator only sets `SECCHIO_*` env vars; the image's `entrypoint.sh` runs restic (`--json` output parsed with `jq`) and writes the pod termination log the operator reads back
 - Repo path is variabilized per PVC: `s3:<endpoint>/<pvc_namespace>/<pvc_name>` to avoid collisions
+- RWO PVCs: the operator pins the backup pod to the node of the pod already mounting the PVC (via `nodeSelector`), refreshed on each reconcile
 - Cron scheduling is delegated to Kubernetes: the operator only sets the CronJob's `schedule` field (no in-operator cron matching) and uses the `kubernetes` Python client to create workloads
 - BackupSchedules create one CronJob per matching PVC; per-PVC status lives in `status.backups`
 - Status is written from Job events (`@kopf.on.event` in `handlers.py`) and, for BackupSchedules, re-synced every 60s by `status.resync_schedule()` from the `check_schedules` timer. Restore status is still event-only (see `AUDIT.md` P1-2)

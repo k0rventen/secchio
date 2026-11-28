@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any
 
+from kubernetes.client import V1PersistentVolumeClaim
 from kubernetes.client.exceptions import ApiException
 
 import k8s
@@ -17,10 +18,13 @@ import status
 from common import (
     CRD_PLURAL_RESTORES,
     REASON_CRONJOB_REJECTED,
+    RESTIC_DEFAULT_SPREAD_SECONDS,
     RESTIC_IMAGE,
+    RESTIC_RESOURCES,
     make_cronjob_name,
     make_restore_job_name,
     now_iso,
+    spread_delay_seconds,
 )
 from crds import (
     BackupEntry,
@@ -45,6 +49,8 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
     schedule_spec = BackupScheduleSpec.model_validate(spec)
     matched = k8s.list_pvcs_by_selector(k8s.get_core_api(), schedule_spec.pvc.selector, namespace)
     logger.info("Schedule %s in %s: %d PVCs match selector", name, namespace, len(matched))
+    spread_seconds = schedule_spec.spread_seconds or RESTIC_DEFAULT_SPREAD_SECONDS
+    pod_nodes = k8s.pod_nodes_by_pvc(namespace) if matched else {}
 
     live = {
         cronjob.metadata.name
@@ -63,7 +69,8 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
 
         desired_names: set[str] = set()
         entries: list[BackupEntry] = []
-        for pvc_name in matched:
+        for pvc in matched:
+            pvc_name = (pvc.metadata.name if pvc.metadata else None) or ""
             cronjob_name = make_cronjob_name(name, pvc_name)
             desired_names.add(cronjob_name)
             entry = current_entries.get(pvc_name, BackupEntry(pvc_name=pvc_name))
@@ -76,6 +83,9 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
                 repo=schedule_spec.repo,
                 image=RESTIC_IMAGE,
                 mode="backup",
+                resources=RESTIC_RESOURCES,
+                start_delay_seconds=spread_delay_seconds(name, pvc_name, spread_seconds),
+                node_selector=_node_selector_for_pvc(pvc, pod_nodes),
                 schedule=schedule_spec.schedule,
                 time_zone=schedule_spec.time_zone,
                 suspend=schedule_spec.suspend,
@@ -106,6 +116,18 @@ def schedule(name: str, namespace: str, spec: dict[str, Any], uid: str) -> None:
                 k8s.delete_cronjob(batch_api, cronjob_name, namespace)
 
         status.reconcile_schedule_status(custom_api, name, namespace, entries)
+
+
+def _node_selector_for_pvc(
+    pvc: V1PersistentVolumeClaim,
+    pod_nodes: dict[str, str],
+) -> dict[str, str] | None:
+    """Pin an RWO PVC's pod to the node already mounting it."""
+    modes = (pvc.spec.access_modes if pvc.spec else None) or []
+    if "ReadWriteOnce" not in modes or "ReadWriteMany" in modes or "ReadOnlyMany" in modes:
+        return None
+    node = pod_nodes.get((pvc.metadata.name if pvc.metadata else None) or "")
+    return {"kubernetes.io/hostname": node} if node else None
 
 
 def _api_error_message(error: ApiException) -> str:
@@ -146,6 +168,13 @@ def restore(name: str, namespace: str, spec: dict[str, Any], meta: dict[str, Any
         return
 
     schedule_cr = BackupSchedule.from_crd(schedule_item)
+    target_pvc_name = restore_spec.target_pvc or restore_spec.pvc_name
+    target_pvc = k8s.get_pvc(k8s.get_core_api(), target_pvc_name, namespace)
+    node_selector = (
+        _node_selector_for_pvc(target_pvc, k8s.pod_nodes_by_pvc(namespace))
+        if target_pvc is not None
+        else None
+    )
     config = WorkloadConfig(
         name=make_restore_job_name(name),
         namespace=namespace,
@@ -153,8 +182,10 @@ def restore(name: str, namespace: str, spec: dict[str, Any], meta: dict[str, Any
         repo=schedule_cr.spec.repo,
         image=RESTIC_IMAGE,
         mode="restore",
+        resources=RESTIC_RESOURCES,
+        node_selector=node_selector,
         snapshot_id=restore_spec.snapshot_id,
-        target_pvc=restore_spec.target_pvc or restore_spec.pvc_name,
+        target_pvc=target_pvc_name,
         schedule_name=restore_spec.schedule_name,
         owner_kind="Restore",
         owner_name=name,

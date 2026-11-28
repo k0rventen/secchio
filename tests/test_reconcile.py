@@ -38,12 +38,41 @@ def _cronjob(name: str):
     return mock.Mock(metadata=SimpleNamespace(name=name))
 
 
+def _pvc(name: str, modes: list[str] | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name),
+        spec=SimpleNamespace(access_modes=modes or ["ReadWriteOnce"]),
+    )
+
+
+def test_schedule_spreads_backup_start() -> None:
+    spec = {**SCHEDULE_SPEC, "spreadSeconds": 300}
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={}),
+        mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
+        mock.patch.object(reconcile.status, "reconcile_schedule_status"),
+    ):
+        reconcile.schedule(name="sched", namespace="ns", spec=spec, uid="uid")
+
+    cronjob = create.call_args.args[1]
+    container = cronjob.spec.job_template.spec.template.spec.containers[0]
+    env = {e.name: e.value for e in container.env}
+    assert 0 <= int(env["SECCHIO_START_DELAY"]) < 300
+
+
 def test_schedule_creates_cronjob_for_matching_pvc() -> None:
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
-        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={}),
         mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
         mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
         mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
@@ -63,13 +92,56 @@ def test_schedule_creates_cronjob_for_matching_pvc() -> None:
     assert entries[0].phase == Phase.PENDING
 
 
+def test_schedule_pins_rwo_pvc_to_consumer_node() -> None:
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={"data": "node-1"}),
+        mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
+        mock.patch.object(reconcile.status, "reconcile_schedule_status"),
+    ):
+        reconcile.schedule(name="sched", namespace="ns", spec=SCHEDULE_SPEC, uid="uid")
+
+    cronjob = create.call_args.args[1]
+    assert cronjob.spec.job_template.spec.template.spec.node_selector == {
+        "kubernetes.io/hostname": "node-1"
+    }
+
+
+def test_schedule_does_not_pin_rwx_pvc() -> None:
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(
+            reconcile.k8s,
+            "list_pvcs_by_selector",
+            return_value=[_pvc("data", ["ReadWriteMany"])],
+        ),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={"data": "node-1"}),
+        mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
+        mock.patch.object(reconcile.status, "reconcile_schedule_status"),
+    ):
+        reconcile.schedule(name="sched", namespace="ns", spec=SCHEDULE_SPEC, uid="uid")
+
+    cronjob = create.call_args.args[1]
+    assert cronjob.spec.job_template.spec.template.spec.node_selector is None
+
+
 def test_schedule_propagates_suspend_to_cronjob() -> None:
     spec = {**SCHEDULE_SPEC, "suspend": True}
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
-        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={}),
         mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
         mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
         mock.patch.object(reconcile.k8s, "create_or_update_cronjob") as create,
@@ -111,7 +183,8 @@ def test_schedule_surfaces_cronjob_rejection() -> None:
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
-        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={}),
         mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
         mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
         mock.patch.object(reconcile.k8s, "create_or_update_cronjob", side_effect=error),
@@ -140,7 +213,8 @@ def test_schedule_clears_cronjob_rejection_once_accepted() -> None:
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
-        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=["data"]),
+        mock.patch.object(reconcile.k8s, "list_pvcs_by_selector", return_value=[_pvc("data")]),
+        mock.patch.object(reconcile.k8s, "pod_nodes_by_pvc", return_value={}),
         mock.patch.object(reconcile.k8s, "list_cronjobs_for_schedule", return_value=[]),
         mock.patch.object(
             reconcile.k8s,
@@ -175,6 +249,8 @@ def test_restore_creates_job() -> None:
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_pvc", return_value=None),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(
             reconcile.k8s, "create_or_update_restore_job", return_value=True
@@ -187,10 +263,34 @@ def test_restore_creates_job() -> None:
     assert patch_status.call_args.kwargs["status"].phase == Phase.RUNNING
 
 
+def test_restore_pins_rwo_target_pvc_to_consumer_node() -> None:
+    target = _pvc("restore-data", ["ReadWriteOnce"])
+    with (
+        mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_pvc", return_value=target),
+        mock.patch.object(
+            reconcile.k8s, "pod_nodes_by_pvc", return_value={"restore-data": "node-1"}
+        ),
+        mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
+        mock.patch.object(
+            reconcile.k8s, "create_or_update_restore_job", return_value=True
+        ) as create_job,
+        mock.patch.object(reconcile.k8s, "patch_status"),
+    ):
+        reconcile.restore(name="rt", namespace="ns", spec=RESTORE_SPEC, meta={})
+
+    job = create_job.call_args.args[1]
+    assert job.spec.template.spec.node_selector == {"kubernetes.io/hostname": "node-1"}
+
+
 def test_restore_does_not_reset_status_when_job_exists() -> None:
     with (
         mock.patch.object(reconcile.k8s, "get_custom_objects_api", return_value=object()),
         mock.patch.object(reconcile.k8s, "get_backup_schedule", return_value=_schedule_item()),
+        mock.patch.object(reconcile.k8s, "get_core_api", return_value=object()),
+        mock.patch.object(reconcile.k8s, "get_pvc", return_value=None),
         mock.patch.object(reconcile.k8s, "get_batch_api", return_value=object()),
         mock.patch.object(
             reconcile.k8s, "create_or_update_restore_job", return_value=False

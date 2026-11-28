@@ -12,8 +12,16 @@ import logging
 from typing import Any
 
 from kubernetes import client
-from kubernetes.client import BatchV1Api, CustomObjectsApi, V1CronJob, V1Job, V1OwnerReference
+from kubernetes.client import (
+    BatchV1Api,
+    CustomObjectsApi,
+    V1CronJob,
+    V1Job,
+    V1OwnerReference,
+    V1PersistentVolumeClaim,
+)
 from kubernetes.client.exceptions import ApiException
+from kubernetes.utils.quantity import parse_quantity
 
 from common import CRD_GROUP, CRD_PLURAL_BACKUPSCHEDULES, CRD_VERSION, LABEL_SCHEDULE
 from crds import BackupScheduleStatus, RestoreStatus
@@ -136,7 +144,38 @@ def _cronjob_drift(existing: V1CronJob, desired: V1CronJob) -> str | None:
             return mismatch
     if desired.spec is None or existing.spec is None:
         return None if desired.spec is existing.spec else "spec: one side is missing"
-    return _first_mismatch(desired.spec.to_dict(), existing.spec.to_dict(), "spec")
+    desired_spec = desired.spec.to_dict()
+    existing_spec = existing.spec.to_dict()
+    _normalize_resource_quantities(desired_spec)
+    _normalize_resource_quantities(existing_spec)
+    return _first_mismatch(desired_spec, existing_spec, "spec")
+
+
+def _normalize_resource_quantities(spec: dict[str, Any]) -> None:
+    """Replace resource quantities with numbers so equivalent values compare equal.
+
+    The API server canonicalizes quantities (``1000m`` becomes ``1``), so comparing
+    the raw strings would report drift for values that mean the same thing.
+    """
+    job_spec = (spec.get("job_template") or {}).get("spec") or {}
+    pod_spec = (job_spec.get("template") or {}).get("spec") or {}
+    containers = pod_spec.get("containers")
+    if not isinstance(containers, list):
+        return
+    for container in containers:
+        resources = container.get("resources") if isinstance(container, dict) else None
+        if not isinstance(resources, dict):
+            continue
+        for section in ("requests", "limits"):
+            quantities = resources.get(section)
+            if not isinstance(quantities, dict):
+                continue
+            for name, value in quantities.items():
+                if isinstance(value, (str, int, float)):
+                    try:
+                        quantities[name] = parse_quantity(str(value))
+                    except ValueError:
+                        pass
 
 
 def _first_mismatch(desired: Any, live: Any, path: str) -> str | None:
@@ -257,8 +296,8 @@ def list_pvcs_by_selector(
     api: client.CoreV1Api,
     selector: dict[str, str],
     namespace: str,
-) -> list[str]:
-    """List PVC names matching a label selector in a namespace.
+) -> list[V1PersistentVolumeClaim]:
+    """List PVCs matching a label selector in a namespace.
 
     API errors propagate: treating a failed list as "no PVCs" would make the
     reconciler delete every CronJob for the schedule.
@@ -268,7 +307,38 @@ def list_pvcs_by_selector(
         namespace=namespace,
         label_selector=compiled_selectors,
     )
-    return [p.metadata.name for p in pvcs.items if p.metadata and p.metadata.name]
+    return [p for p in pvcs.items if p.metadata and p.metadata.name]
+
+
+def get_pvc(
+    api: client.CoreV1Api,
+    name: str,
+    namespace: str,
+) -> V1PersistentVolumeClaim | None:
+    """Get a PVC by name, or ``None`` if it does not exist."""
+    try:
+        return api.read_namespaced_persistent_volume_claim(name=name, namespace=namespace)
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+
+
+def pod_nodes_by_pvc(namespace: str) -> dict[str, str]:
+    """Map each PVC to the node of a scheduled pod mounting it."""
+    pods = get_core_api().list_namespaced_pod(namespace=namespace)
+    nodes: dict[str, str] = {}
+    for pod in pods.items:
+        meta, spec = pod.metadata, pod.spec
+        if not meta or not spec or not spec.node_name or meta.deletion_timestamp:
+            continue
+        if pod.status and pod.status.phase in ("Succeeded", "Failed"):
+            continue
+        for volume in spec.volumes or []:
+            claim = volume.persistent_volume_claim
+            if claim and claim.claim_name:
+                nodes.setdefault(claim.claim_name, spec.node_name)
+    return nodes
 
 
 def list_custom_objects(api: CustomObjectsApi, plural: str) -> list[dict[str, Any]]:

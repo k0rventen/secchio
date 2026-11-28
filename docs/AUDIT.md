@@ -193,11 +193,11 @@ The codebase is small, readable, and clean on dead code. The main risks are **op
 
 ### P1-12 RWO PVC multi-attach failures
 
-- **Where:** `src/workloads.py`, `src/restic.py`, `src/crds.py`.
+- **Where:** `src/k8s.py`, `src/reconcile.py`, `src/workloads.py`, `src/restic.py`.
 - **Problem:** Backup/restore pods mount the PVC directly. If the PVC is `ReadWriteOnce` and currently mounted by a workload on another node, the pod fails with a `Multi-Attach error`. There is no way to influence scheduling.
 - **Impact:** Backups fail for the most common PVC access mode whenever the workload is running elsewhere.
 - **Recommendation:** Add optional `nodeSelector`/`tolerations`/`affinity` (and/or a co-schedule-with-consumer strategy) to `BackupScheduleSpec`; longer term, use CSI `VolumeSnapshot` as the backup source (see §5.1).
-- **Status:** **Open.**
+- **Status:** **Partial.** Backup pods for RWO PVCs are pinned to the node of the pod mounting the PVC via `nodeSelector`, refreshed on the 60s reconcile. Restore pods now use the same pin for their target PVC. Manual overrides/tolerations are still open.
 
 ---
 
@@ -219,7 +219,7 @@ The codebase is small, readable, and clean on dead code. The main risks are **op
 | P2-12 | UI `phaseBadge` class injection | `src/static/index.html` (`phaseBadge`) | Whitelist known phases and map unknown values to a safe default. | Open |
 | P2-13 | FastAPI docs are exposed | `src/api.py` (`FastAPI(...)`) | Set `docs_url=None`, `redoc_url=None`, `openapi_url=None` in production, or protect them. | Open |
 | P2-14 | No rate limiting or CSRF protection | `src/api.py` | Add rate limiting; require a custom header or CSRF token; check `Origin`/`Sec-Fetch-Site`. | Open |
-| P2-15 | Restic pods run as root with `DAC_OVERRIDE` | `src/restic.py` (`container_security_context`) | Run as non-root with `fsGroup` where possible, or use `DAC_READ_SEARCH` where PSA allows it; document the tradeoff. | Open |
+| P2-15 | Restic pods run as root with the runtime default capabilities | `src/restic.py` (`container_security_context`) | Restore needs `CHOWN`/`FOWNER` (restic `lchown`s restored files, then `chmod`s/`chtimes`s them), so capabilities are currently left at the runtime default. Re-harden with `drop: ["ALL"]` + `add: ["DAC_OVERRIDE", "CHOWN", "FOWNER"]` (all baseline-PSA-legal); `tests/e2e/run.sh` restores files with mixed modes/owners to guard this. | Open |
 | P2-16 | No NetworkPolicy | chart | Add an optional NetworkPolicy restricting egress to DNS and the S3 endpoint (and the API if needed). | Open |
 | P2-17 | `insecureTLS` disables certificate verification | `src/crds.py`, `restic-pod/entrypoint.sh` | Document the risk; support a custom CA bundle (`AWS_CA_BUNDLE`) as the preferred alternative; warn in the UI. | Open |
 | P2-18 | `RESTIC_IMAGE` defaults to `:latest` | `src/common.py` | Default to a pinned version (or require the env var) and prefer digest pinning. | Open |
@@ -431,7 +431,7 @@ Document that the backup pod mounts the PVC read-only while the workload writes 
 - [ ] Truncate/hash long names and label values (P1-7).
 - [ ] Fix `jq` null and the `rm -rf data/*` path; increase the snapshot timeout (P1-8, P1-9).
 - [ ] Add `activeDeadlineSeconds` and a cache `sizeLimit` (P1-10, P1-11).
-- [ ] Add scheduling controls for RWO PVCs (P1-12).
+- [x] Co-schedule RWO backup pods with the pod mounting the PVC (P1-12, partial).
 - [ ] Use `Orphan` propagation (or wait) when deleting orphaned CronJobs (P2-27).
 
 ### Phase 3 — Hardening and operability (weeks)
@@ -446,7 +446,9 @@ Document that the backup pod mounts the PVC read-only while the workload writes 
 - [ ] Run restic as non-root with `fsGroup`; add `seccompProfile`/`runAsNonRoot` to the operator (P2-15).
 - [ ] Support a CA bundle; warn on `insecureTLS`; pin images by digest (P2-17, P2-18).
 - [ ] Add metrics/Events; add `restic check`; document consistency (P2-20, P2-21, P2-22).
-- [ ] Add `imagePullSecrets`, configurable resources/history limits, and chart values (P2-19).
+- [x] Make restic pod resources configurable via the chart's `restic.resources`.
+- [x] Spread scheduled backups with a per-PVC start delay (`spec.spreadSeconds` / `restic.defaultSpreadSeconds`).
+- [ ] Add `imagePullSecrets` and configurable history limits (P2-19).
 - [ ] Add leader election or document single-replica (P2-23).
 - [ ] Supervise the UI thread; add API timeouts; stop swallowing errors (P2-24, P2-25, P2-26).
 - [ ] Batch the resync to avoid O(PVCs) API calls per minute (P2-36).

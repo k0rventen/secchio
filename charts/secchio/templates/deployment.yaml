@@ -25,6 +25,10 @@ spec:
           env:
             - name: RESTIC_IMAGE
               value: "{{ .Values.restic.image }}:{{ .Values.restic.tag }}"
+            - name: RESTIC_RESOURCES
+              value: {{ .Values.restic.resources | toJson | quote }}
+            - name: RESTIC_DEFAULT_SPREAD_SECONDS
+              value: "{{ .Values.restic.defaultSpreadSeconds }}"
             - name: OPERATOR_VERSION
               value: "{{ .Chart.AppVersion }}"
           ports:

@@ -2,16 +2,46 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   labels:
-    app: python-test-app
-  name: python-test-app2
-  namespace: testing
+    app: lol-app
+  name: lol-app
+  namespace: production
 spec:
   accessModes:
   - ReadWriteOnce
   resources:
     requests:
       storage: 3Gi
-  storageClassName: longhorn
+  storageClassName: longhorn-luks
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lol-app
+  labels:
+    app: lol-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lol-app
+  template:
+    metadata:
+      labels:
+        app: lol-app
+    spec:
+      containers:
+        - name: lol-app
+          image: nginx
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: lol-app
+
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

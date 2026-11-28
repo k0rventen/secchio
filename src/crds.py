@@ -134,6 +134,7 @@ class BackupScheduleSpec(Model):
     pvc: PVCSelector = Field(default_factory=PVCSelector)
     schedule: str = ""
     time_zone: str = ""
+    spread_seconds: int | None = None
     repo: S3BackendConfig = Field(default_factory=S3BackendConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     suspend: bool = False
