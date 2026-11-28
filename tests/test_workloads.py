@@ -184,6 +184,13 @@ def test_restore_pod_has_no_start_delay() -> None:
     assert _env_value(_container(_restore_pod()), "SECCHIO_START_DELAY") is None
 
 
+def test_pod_uses_node_selector() -> None:
+    config = _backup_config()
+    config.node_selector = {"kubernetes.io/hostname": "node-1"}
+
+    assert _backup_pod(config).node_selector == {"kubernetes.io/hostname": "node-1"}
+
+
 def test_backup_cronjob_suspend_flag() -> None:
     config = _backup_config()
     config.suspend = True

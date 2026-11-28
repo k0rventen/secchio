@@ -35,14 +35,40 @@ def test_patch_status_falls_back_without_status_subresource() -> None:
 
 def test_list_pvcs_by_selector_is_namespace_scoped() -> None:
     api = mock.Mock()
-    api.list_namespaced_persistent_volume_claim.return_value = mock.Mock(
-        items=[mock.Mock(metadata=SimpleNamespace(name="data"))]
-    )
+    pvc = mock.Mock(metadata=SimpleNamespace(name="data"))
+    api.list_namespaced_persistent_volume_claim.return_value = mock.Mock(items=[pvc])
 
-    assert k8s.list_pvcs_by_selector(api, {"app": "x"}, "ns") == ["data"]
+    assert k8s.list_pvcs_by_selector(api, {"app": "x"}, "ns") == [pvc]
     api.list_namespaced_persistent_volume_claim.assert_called_once_with(
         namespace="ns", label_selector="app=x"
     )
+
+
+def _pod_mounting(pvc_name: str, node: str = "node-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(deletion_timestamp=None),
+        spec=SimpleNamespace(
+            node_name=node,
+            volumes=[SimpleNamespace(persistent_volume_claim=SimpleNamespace(claim_name=pvc_name))],
+        ),
+        status=SimpleNamespace(phase="Running"),
+    )
+
+
+def test_pod_nodes_by_pvc_maps_scheduled_consumer() -> None:
+    api = mock.Mock()
+    api.list_namespaced_pod.return_value = mock.Mock(items=[_pod_mounting("data")])
+
+    with mock.patch.object(k8s, "get_core_api", return_value=api):
+        assert k8s.pod_nodes_by_pvc("ns") == {"data": "node-1"}
+
+
+def test_pod_nodes_by_pvc_ignores_unscheduled_pods() -> None:
+    api = mock.Mock()
+    api.list_namespaced_pod.return_value = mock.Mock(items=[_pod_mounting("data", node="")])
+
+    with mock.patch.object(k8s, "get_core_api", return_value=api):
+        assert k8s.pod_nodes_by_pvc("ns") == {}
 
 
 def test_list_cronjobs_for_schedule_uses_label_selector() -> None:
@@ -70,6 +96,21 @@ def test_get_backup_schedule_raises_on_other_errors() -> None:
 
     with pytest.raises(ApiException):
         k8s.get_backup_schedule(api, "sched", "ns")
+
+
+def test_get_pvc_returns_none_on_404() -> None:
+    api = mock.Mock()
+    api.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
+
+    assert k8s.get_pvc(api, "data", "ns") is None
+
+
+def test_get_pvc_raises_on_other_errors() -> None:
+    api = mock.Mock()
+    api.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=500)
+
+    with pytest.raises(ApiException):
+        k8s.get_pvc(api, "data", "ns")
 
 
 def test_owner_reference_requires_name_and_uid() -> None:
