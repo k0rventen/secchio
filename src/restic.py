@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from kubernetes.client import (
     V1Container,
+    V1ContainerState,
     V1EmptyDirVolumeSource,
     V1EnvVar,
     V1EnvVarSource,
@@ -169,6 +170,16 @@ def _latest_pod_status(job_name: str, namespace: str) -> V1PodStatus | None:
     return max(pods.items, key=_pod_creation_time).status
 
 
+def _latest_pod_and_state(
+    job_name: str, namespace: str
+) -> tuple[V1PodStatus | None, V1ContainerState | None]:
+    """The newest pod's status and its last container's state, if any."""
+    pod_status = _latest_pod_status(job_name, namespace)
+    if pod_status is None or not pod_status.container_statuses:
+        return pod_status, None
+    return pod_status, pod_status.container_statuses[-1].state
+
+
 def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     """Read the last pod's outcome for a Job.
 
@@ -178,18 +189,13 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
     never started, the waiting state (e.g. ``CreateContainerConfigError``) or a
     failing pod condition is surfaced instead.
     """
-    pod_status = _latest_pod_status(job_name, namespace)
+    pod_status, state = _latest_pod_and_state(job_name, namespace)
     if pod_status is None:
         return TerminationInfo()
-
-    statuses = pod_status.container_statuses
-    if not statuses:
+    if state is None:
         # The pod never started (e.g. unschedulable); surface its condition.
         return TerminationInfo(error=_pod_condition_message(pod_status))
-
-    container_status = statuses[-1]
-    state = container_status.state
-    if state and state.waiting:
+    if state.waiting:
         # The container never started (e.g. CreateContainerConfigError for a
         # missing Secret). There is no termination log to parse.
         return TerminationInfo(
@@ -197,7 +203,7 @@ def extract_termination_info(job_name: str, namespace: str) -> TerminationInfo:
             waiting_message=state.waiting.message or "",
         )
 
-    term_state = state.terminated if state else None
+    term_state = state.terminated
     if not term_state:
         return TerminationInfo()
 
@@ -224,16 +230,12 @@ def extract_pod_blocker(job_name: str, namespace: str) -> TerminationInfo:
     ``TerminationInfo`` while the pod is running or still starting, and ignores a
     container that has terminated (the Job controller handles retries).
     """
-    pod_status = _latest_pod_status(job_name, namespace)
+    pod_status, state = _latest_pod_and_state(job_name, namespace)
     if pod_status is None:
         return TerminationInfo()
-
-    statuses = pod_status.container_statuses
-    if not statuses:
+    if state is None:
         return TerminationInfo(error=_pod_scheduling_error(pod_status))
-
-    state = statuses[-1].state
-    if state and state.waiting and state.waiting.reason in TERMINAL_WAITING_REASONS:
+    if state.waiting and state.waiting.reason in TERMINAL_WAITING_REASONS:
         return TerminationInfo(
             waiting_reason=state.waiting.reason or "",
             waiting_message=state.waiting.message or "",
@@ -267,6 +269,7 @@ def build_restic_pod(
     pvc_name: str,
     read_only: bool,
     resources: dict[str, dict[str, str]] | None = None,
+    node_selector: dict[str, str] | None = None,
     mount_pvc: bool = True,
 ) -> V1PodSpec:
     """Build the hardened pod spec shared by backup, restore and scan Jobs.
@@ -274,7 +277,8 @@ def build_restic_pod(
     Mounts the PVC at ``/data`` (read-only for backups, read-write for restores)
     next to a writable cache volume, and applies the shared security context.
     ``resources`` is the operator-wide restic resource config (from the chart);
-    when omitted, the container has no requests/limits. Scan Jobs set
+    when omitted, the container has no requests/limits. ``node_selector`` pins
+    RWO PVCs to the node already mounting them. Scan Jobs set
     ``mount_pvc=False``: listing snapshots only needs the repo.
     """
     # Scratch space for restic's local cache (the container root is read-only).
@@ -297,7 +301,7 @@ def build_restic_pod(
         image=image,
         env=env,
         volume_mounts=mounts,
-        security_context=container_security_context(),
+        security_context=V1SecurityContext(read_only_root_filesystem=True),
         termination_message_path="/dev/termination-log",
         termination_message_policy="FallbackToLogsOnError",
         # The drift check compares quantities numerically, so the chart can use
@@ -315,10 +319,7 @@ def build_restic_pod(
         restart_policy="OnFailure",
         containers=[container],
         volumes=volumes,
+        node_selector=node_selector,
         automount_service_account_token=False,
         enable_service_links=False,
     )
-
-
-def container_security_context() -> V1SecurityContext:
-    return V1SecurityContext(read_only_root_filesystem=True)

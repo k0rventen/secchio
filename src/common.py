@@ -101,12 +101,7 @@ def make_restore_labels(restore_name: str, schedule_name: str, pvc_name: str) ->
 
 def make_scan_labels(schedule_name: str, pvc_name: str) -> dict[str, str]:
     """Generate standard labels for a snapshot-scan Job."""
-    return {
-        **_base_labels(),
-        LABEL_SCHEDULE: schedule_name,
-        LABEL_PVC_NAME: pvc_name,
-        LABEL_SCAN: "true",
-    }
+    return {**make_cronjob_labels(schedule_name, pvc_name), LABEL_SCAN: "true"}
 
 
 # Scheduling helpers

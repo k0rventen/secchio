@@ -12,7 +12,14 @@ import logging
 from typing import Any
 
 from kubernetes import client
-from kubernetes.client import BatchV1Api, CustomObjectsApi, V1CronJob, V1Job, V1OwnerReference
+from kubernetes.client import (
+    BatchV1Api,
+    CustomObjectsApi,
+    V1CronJob,
+    V1Job,
+    V1OwnerReference,
+    V1PersistentVolumeClaim,
+)
 from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
 
@@ -289,8 +296,8 @@ def list_pvcs_by_selector(
     api: client.CoreV1Api,
     selector: dict[str, str],
     namespace: str,
-) -> list[str]:
-    """List PVC names matching a label selector in a namespace.
+) -> list[V1PersistentVolumeClaim]:
+    """List PVCs matching a label selector in a namespace.
 
     API errors propagate: treating a failed list as "no PVCs" would make the
     reconciler delete every CronJob for the schedule.
@@ -300,7 +307,38 @@ def list_pvcs_by_selector(
         namespace=namespace,
         label_selector=compiled_selectors,
     )
-    return [p.metadata.name for p in pvcs.items if p.metadata and p.metadata.name]
+    return [p for p in pvcs.items if p.metadata and p.metadata.name]
+
+
+def get_pvc(
+    api: client.CoreV1Api,
+    name: str,
+    namespace: str,
+) -> V1PersistentVolumeClaim | None:
+    """Get a PVC by name, or ``None`` if it does not exist."""
+    try:
+        return api.read_namespaced_persistent_volume_claim(name=name, namespace=namespace)
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+
+
+def pod_nodes_by_pvc(namespace: str) -> dict[str, str]:
+    """Map each PVC to the node of a scheduled pod mounting it."""
+    pods = get_core_api().list_namespaced_pod(namespace=namespace)
+    nodes: dict[str, str] = {}
+    for pod in pods.items:
+        meta, spec = pod.metadata, pod.spec
+        if not meta or not spec or not spec.node_name or meta.deletion_timestamp:
+            continue
+        if pod.status and pod.status.phase in ("Succeeded", "Failed"):
+            continue
+        for volume in spec.volumes or []:
+            claim = volume.persistent_volume_claim
+            if claim and claim.claim_name:
+                nodes.setdefault(claim.claim_name, spec.node_name)
+    return nodes
 
 
 def list_custom_objects(api: CustomObjectsApi, plural: str) -> list[dict[str, Any]]:

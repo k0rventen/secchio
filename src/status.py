@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import weakref
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -45,8 +46,9 @@ logger = logging.getLogger("status")
 _api_client = ApiClient()
 
 # Serialize read-modify-write cycles on a schedule's status. This is process-local
-# coordination only; the operator keeps no durable state.
-_locks: dict[str, threading.Lock] = {}
+# coordination only; the operator keeps no durable state. Weak values let a lock be
+# collected once no writer holds it, so the map stays bounded.
+_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 _locks_guard = threading.Lock()
 
 
@@ -308,7 +310,7 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
     snapshot = info.restored_snapshot_id or info.snapshot_id
 
     if job.succeeded:
-        status = RestoreStatus(
+        new_status = RestoreStatus(
             phase=Phase.COMPLETED,
             completion_time=job.completion_time or now_iso(),
             snapshot_id=snapshot,
@@ -316,7 +318,7 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
         )
     elif job.failed:
         reason = _failure_reason(info, job, "Restore job failed")
-        status = RestoreStatus(
+        new_status = RestoreStatus(
             phase=Phase.FAILED,
             completion_time=now_iso(),
             snapshot_id=snapshot,
@@ -325,14 +327,14 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
     elif job.active:
         blocker = _pod_blocker(job)
         if blocker is not None:
-            status = RestoreStatus(
+            new_status = RestoreStatus(
                 phase=Phase.FAILED,
                 completion_time=now_iso(),
                 snapshot_id=snapshot,
                 message=f"Restore failed: {_failure_reason(blocker, job, 'Pod failed to start')}",
             )
         else:
-            status = RestoreStatus(
+            new_status = RestoreStatus(
                 phase=Phase.RUNNING,
                 start_time=job.start_time or now_iso(),
                 snapshot_id=snapshot,
@@ -346,7 +348,7 @@ def _sync_restore_from_job(job: JobStatus, restore_name: str) -> None:
         plural=CRD_PLURAL_RESTORES,
         name=restore_name,
         namespace=job.namespace,
-        status=status,
+        status=new_status,
     )
 
 

@@ -6,8 +6,8 @@ manual backups/restores. The frontend is served as static files.
 
 from __future__ import annotations
 
-import logging
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ from common import (
     make_cronjob_name,
     make_restore_labels,
 )
-from crds import BackupSchedule, Restore, RestoreSpec
+from crds import BackupEntry, BackupSchedule, Restore, RestoreSpec
 from k8s import (
     get_backup_schedule,
     get_batch_api,
@@ -41,8 +41,6 @@ from k8s import (
     list_custom_objects,
 )
 from workloads import WorkloadConfig, create_scan_job
-
-logger = logging.getLogger("api")
 
 app = FastAPI(title="Backup Operator UI", description="UI for the backup operator")
 
@@ -70,7 +68,7 @@ class CreateRestoreRequest(BaseModel):
 
 def _get_schedule_or_404(
     namespace: str, schedule_name: str, *, require_backups: bool = False
-) -> tuple[BackupSchedule, dict[str, Any]]:
+) -> BackupSchedule:
     """Read a BackupSchedule, raising 404 when it (or its backups) is missing."""
     item = get_backup_schedule(get_custom_objects_api(), schedule_name, namespace)
     if item is None:
@@ -84,7 +82,25 @@ def _get_schedule_or_404(
             status_code=404,
             detail=f"No backups found for schedule '{schedule_name}' in namespace '{namespace}'",
         )
-    return schedule, item
+    return schedule
+
+
+def _fan_out(
+    entries: Iterable[BackupEntry],
+    action: Callable[[BackupEntry], str],
+    result_key: str,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Run ``action`` for each PVC, collecting successes and per-PVC errors."""
+    triggered: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for entry in entries:
+        try:
+            triggered.append({"pvc": entry.pvc_name, result_key: action(entry)})
+        except HTTPException as e:
+            errors.append({"pvc": entry.pvc_name, "error": str(e.detail)})
+        except ApiException as e:
+            errors.append({"pvc": entry.pvc_name, "error": str(e)})
+    return triggered, errors
 
 
 def _restore_view(restore: Restore) -> dict[str, Any]:
@@ -211,16 +227,12 @@ async def trigger_backup(namespace: str, cronjob_name: str) -> dict[str, Any]:
 @app.post("/api/schedules/{namespace}/{schedule_name}/trigger")
 async def trigger_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Trigger a manual backup for every PVC under a BackupSchedule."""
-    schedule, _ = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
-
-    triggered: list[dict[str, str]] = []
-    errors: list[dict[str, str]] = []
-    for entry in schedule.status.backups:
-        try:
-            job_name = _trigger_backup_job(namespace, entry.cronjob_name)
-            triggered.append({"pvc": entry.pvc_name, "job_name": job_name})
-        except HTTPException as e:
-            errors.append({"pvc": entry.pvc_name, "error": str(e.detail)})
+    schedule = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
+    triggered, errors = _fan_out(
+        schedule.status.backups,
+        lambda entry: _trigger_backup_job(namespace, entry.cronjob_name),
+        "job_name",
+    )
 
     if not triggered:
         raise HTTPException(
@@ -242,7 +254,6 @@ def _create_scan_job(
     schedule_name: str,
     pvc_name: str,
     schedule: BackupSchedule,
-    uid: str,
 ) -> str:
     """Create a Job that lists a PVC's snapshots and return its name."""
     job_name = f"{make_cronjob_name(schedule_name, pvc_name)[:40]}-scan-{int(time.time())}"
@@ -257,7 +268,7 @@ def _create_scan_job(
         schedule_name=schedule_name,
         owner_kind="BackupSchedule",
         owner_name=schedule_name,
-        owner_uid=uid,
+        owner_uid=schedule.uid,
     )
     get_batch_api().create_namespaced_job(namespace=namespace, body=create_scan_job(config))
     return job_name
@@ -266,16 +277,12 @@ def _create_scan_job(
 @app.post("/api/schedules/{namespace}/{schedule_name}/scan")
 async def scan_schedule(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Create a scan Job per PVC to refresh the schedule's snapshot list."""
-    schedule, item = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
-    uid = str((item.get("metadata") or {}).get("uid", ""))
-    triggered: list[dict[str, str]] = []
-    errors: list[dict[str, str]] = []
-    for entry in schedule.status.backups:
-        try:
-            job_name = _create_scan_job(namespace, schedule_name, entry.pvc_name, schedule, uid)
-            triggered.append({"pvc": entry.pvc_name, "job_name": job_name})
-        except ApiException as e:
-            errors.append({"pvc": entry.pvc_name, "error": str(e)})
+    schedule = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
+    triggered, errors = _fan_out(
+        schedule.status.backups,
+        lambda entry: _create_scan_job(namespace, schedule_name, entry.pvc_name, schedule),
+        "job_name",
+    )
 
     return {
         "status": "triggered",
@@ -338,7 +345,7 @@ def _set_suspend(namespace: str, schedule_name: str, suspend: bool) -> None:
 @app.post("/api/schedules/{namespace}/{schedule_name}/disaster-recovery")
 async def disaster_recovery(namespace: str, schedule_name: str) -> dict[str, Any]:
     """Suspend backups and restore every PVC in the schedule from its latest snapshot."""
-    schedule, _ = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
+    schedule = _get_schedule_or_404(namespace, schedule_name, require_backups=True)
 
     active = _active_backup_jobs(namespace, schedule_name)
     if active:
@@ -348,17 +355,13 @@ async def disaster_recovery(namespace: str, schedule_name: str) -> dict[str, Any
         )
 
     _set_suspend(namespace, schedule_name, True)
-
-    triggered: list[dict[str, str]] = []
-    errors: list[dict[str, str]] = []
-    for entry in schedule.status.backups:
-        try:
-            restore_name = _create_restore(
-                namespace, schedule_name, entry.pvc_name, entry.pvc_name, "latest"
-            )
-            triggered.append({"pvc": entry.pvc_name, "restore": restore_name})
-        except ApiException as e:
-            errors.append({"pvc": entry.pvc_name, "error": str(e)})
+    triggered, errors = _fan_out(
+        schedule.status.backups,
+        lambda entry: _create_restore(
+            namespace, schedule_name, entry.pvc_name, entry.pvc_name, "latest"
+        ),
+        "restore",
+    )
 
     return {
         "status": "triggered",

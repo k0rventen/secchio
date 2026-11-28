@@ -46,6 +46,7 @@ class WorkloadConfig:
     mode: str
     resources: dict[str, dict[str, str]] | None = None
     start_delay_seconds: int = 0
+    node_selector: dict[str, str] | None = None
     schedule: str = ""
     time_zone: str = ""
     suspend: bool = False
@@ -81,8 +82,13 @@ def _pod(
         pvc_name=pvc_name,
         read_only=read_only,
         resources=config.resources,
+        node_selector=config.node_selector,
         mount_pvc=mount_pvc,
     )
+
+
+def _pod_template(labels: dict[str, str], pod_spec: V1PodSpec) -> V1PodTemplateSpec:
+    return V1PodTemplateSpec(metadata=V1ObjectMeta(labels=labels), spec=pod_spec)
 
 
 def _owner(config: WorkloadConfig) -> list[V1OwnerReference] | None:
@@ -127,10 +133,7 @@ def create_cronjob(config: WorkloadConfig) -> V1CronJob:
                 spec=V1JobSpec(
                     backoff_limit=2,
                     ttl_seconds_after_finished=JOB_TTL_SECONDS,
-                    template=V1PodTemplateSpec(
-                        metadata=V1ObjectMeta(labels=labels),
-                        spec=pod_spec,
-                    ),
+                    template=_pod_template(labels, pod_spec),
                 ),
             ),
         ),
@@ -151,10 +154,7 @@ def _job(config: WorkloadConfig, labels: dict[str, str], pod_spec: V1PodSpec) ->
         spec=V1JobSpec(
             backoff_limit=1,
             ttl_seconds_after_finished=JOB_TTL_SECONDS,
-            template=V1PodTemplateSpec(
-                metadata=V1ObjectMeta(labels=labels),
-                spec=pod_spec,
-            ),
+            template=_pod_template(labels, pod_spec),
         ),
     )
 
