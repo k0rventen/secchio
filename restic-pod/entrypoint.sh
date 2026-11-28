@@ -1,12 +1,10 @@
 #!/bin/sh
-#
-# secchio restic entrypoint.
-# Configuration via env vars (plus the usual RESTIC_* / AWS_* env vars.) :
+# Configuration via env vars (plus the usual RESTIC_* / AWS_* env vars) :
 #   SECCHIO_MODE          backup | restore | scan
 #   SECCHIO_INSECURE_TLS  "true" to add --insecure-tls to every restic call
 #   SECCHIO_RETENTION     backup only: restic forget flags, e.g. "--keep-daily 7"
 #   SECCHIO_SNAPSHOT      restore only: snapshot id or "latest" (default)
-#   SECCHIO_START_DELAY   backup only: seconds to wait before starting (spread)
+#   SECCHIO_START_DELAY   backup only: seconds to wait before starting
 #
 # Alpine's /bin/sh supports pipefail
 # shellcheck disable=SC3040
@@ -15,10 +13,10 @@ set -euo pipefail
 TLS_FLAG=""
 [ "${SECCHIO_INSECURE_TLS:-false}" = "true" ] && TLS_FLAG="--insecure-tls"
 
-# Spread scheduled backups so dozens of pods don't hit the repo at once.
+# Spread scheduled backups so dozens of pods don't hit the storage backend all at once.
 START_DELAY="${SECCHIO_START_DELAY:-0}"
 if [ "$START_DELAY" -gt 0 ]; then
-  echo "waiting ${START_DELAY}s before starting (spread)"
+  echo "waiting ${START_DELAY}s before starting.."
   sleep "$START_DELAY"
 fi
 
@@ -29,9 +27,8 @@ restic $TLS_FLAG unlock || true
 if [ "${SECCHIO_MODE:-}" = "backup" ]; then
   timeout 10s restic $TLS_FLAG snapshots --json >/dev/null 2>&1 || restic $TLS_FLAG init
 
-  restic $TLS_FLAG backup /data --quiet --no-scan --json > /tmp/backup.json
-  cat /tmp/backup.json
-  SNAP_ID="$(jq -r '.snapshot_id' /tmp/backup.json)"
+  restic $TLS_FLAG backup /data --no-scan --json | tee /tmp/backup.json
+  SNAP_ID="$(jq -r 'select(.message_type == "summary") | .snapshot_id' /tmp/backup.json)"
   # restic's summary reports the full 64-char id; use the short form for display.
   SNAP_SHORT="$(printf '%.8s' "$SNAP_ID")"
 
